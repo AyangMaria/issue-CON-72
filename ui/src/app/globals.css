@@ -1,0 +1,120 @@
+
+@import "tailwindcss";
+
+/* Layout state shared between Sidebar, Topbar, and the content offset in
+   layout.tsx. Not a color/theme concern, so it lives outside the
+   [data-theme] blocks below — same value regardless of theme. */
+:root {
+  --sidebar-width: 240px;
+}
+
+/* @theme maps a design token to a Tailwind utility. Naming it
+   --color-app-bg is what makes `bg-app-bg` exist as a class — Tailwind
+   generates it from this block, not from a config object anymore. */
+@theme {
+  --color-app-bg: var(--app-bg);
+  --color-app-sidebar: var(--app-sidebar);
+  --color-app-surface: var(--app-surface);
+  --color-app-surface-alt: var(--app-surface-alt);
+  --color-app-border: var(--app-border);
+  --color-app-border-light: var(--app-border-light);
+
+  --color-status-low: var(--status-low);
+  --color-status-medium: var(--status-medium);
+  --color-status-high: var(--status-high);
+  --color-status-info: var(--status-info);
+
+  --color-accent-400: var(--accent-400);
+  --color-accent-500: var(--accent-500);
+  --color-accent-600: var(--accent-600);
+
+  --color-fg: var(--fg, #f8fafc);
+  --color-fg-secondary: var(--fg-secondary, #cbd5e1);
+  --color-fg-muted: var(--fg-muted, #94a3b8);
+
+  /* Badge pairs*/
+  --color-badge-low: var(--badge-low);
+  --color-badge-low-text: var(--badge-low-text);
+  --color-badge-medium: var(--badge-medium);
+  --color-badge-medium-text: var(--badge-medium-text);
+  --color-badge-high: var(--badge-high);
+  --color-badge-high-text: var(--badge-high-text);
+
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* The actual color VALUES live here, keyed by data-theme. @theme above
+   only says "these tokens exist as classes" — it doesn't know their
+   values, so swapping [data-theme] still swaps the whole palette with
+   zero changes to any component. */
+:root[data-theme="dark"] {
+  --app-bg: #0b0e14;
+  --app-sidebar: #111620;
+  --app-surface: #151c28;
+  --app-surface-alt: #18202e;
+  --app-border: #1e293b;
+  --app-border-light: #263345;
+
+  --status-low: #10b981;
+  --status-medium: #f59e0b;
+  --status-high: #f43f5e;
+  --status-info: #38bdf8;
+
+  --accent-400: #34d399;
+  --accent-500: #10b981;
+  --accent-600: #059669;
+
+  --fg: #f8fafc;
+  --fg-secondary: #cbd5e1;
+  --fg-muted: #94a3b8;
+
+  --badge-low: #10b981;
+  --badge-low-text: #6ee7b7;
+  --badge-medium: #f59e0b;
+  --badge-medium-text: #fcd34d;
+  --badge-high: #f43f5e;
+  --badge-high-text: #fda4af;
+}
+
+:root[data-theme="light"] {
+  --app-bg: #f7f9fc;
+  --app-sidebar: #ffffff;
+  --app-surface: #ffffff;
+  --app-surface-alt: #f1f5f9;
+  --app-border: #e2e8f0;
+  --app-border-light: #cbd5e1;
+
+  --status-low: #059669;
+  --status-medium: #b45309;
+  --status-high: #be123c;
+  --status-info: #0369a1;
+
+  --accent-400: #059669;
+  --accent-500: #047857;
+  --accent-600: #065f46;
+
+  --fg: #0f172a;
+  --fg-secondary: #334155;
+  --fg-muted: #64748b;
+
+  /* Same base hues as dark mode, but with darker text  */
+  --badge-low: #10b981;
+  --badge-low-text: #047857;
+  --badge-medium: #f59e0b;
+  --badge-medium-text: #92400e;
+  --badge-high: #f43f5e;
+  --badge-high-text: #9f1239;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--app-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--app-border);
+  border-radius: 9999px;
+}
