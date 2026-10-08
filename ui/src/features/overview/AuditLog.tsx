@@ -29,14 +29,14 @@ export function AuditLog() {
 
   return (
     <div className="bg-app-surface border border-app-border rounded-xl overflow-hidden">
-      <div className="px-5 py-4 border-b border-app-border bg-app-surfaceAlt/60">
+      <div className="px-5 py-4 border-b border-app-border bg-app-surface-alt/60">
         <h2 className="text-sm font-semibold text-fg">Operational verification and audit log</h2>
       </div>
 
       {isPending ? (
         <div className="p-5 space-y-3 animate-pulse">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-12 bg-app-surfaceAlt rounded" />
+            <div key={i} className="h-12 bg-app-surface-alt rounded" />
           ))}
         </div>
       ) : isError ? (

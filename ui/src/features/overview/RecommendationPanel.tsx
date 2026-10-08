@@ -47,7 +47,7 @@ export function RecommendationPanel() {
 
   return (
     <PanelShell refreshing={isRefetching}>
-      <div className="px-5 py-4 border-b border-app-border flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-app-surfaceAlt/60">
+      <div className="px-5 py-4 border-b border-app-border flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-app-surface-alt/60">
         <div className="flex items-center gap-2.5">
           <SlidersHorizontal className="w-4 h-4 text-emerald-400" />
           <h2 className="text-sm font-semibold text-fg">Top Prioritized Recommendations</h2>
@@ -98,7 +98,7 @@ export function RecommendationPanel() {
         <>
           <table className="w-full text-left border-collapse table-auto">
             <thead>
-              <tr className="h-9 bg-app-surfaceAlt border-b border-app-border font-mono text-[11px] text-slate-400 uppercase tracking-wider">
+              <tr className="h-9 bg-app-surface-alt border-b border-app-border font-mono text-[11px] text-slate-400 uppercase tracking-wider">
                 <th className="px-3 font-semibold">Resource / Target</th>
                 <th className="px-2.5 font-semibold">Owner / Policy</th>
                 <th className="px-2.5 font-semibold">Risk</th>
@@ -175,7 +175,7 @@ export function RecommendationPanel() {
             </tbody>
           </table>
 
-          <div className="px-5 py-3 bg-app-surfaceAlt/60 border-t border-app-border flex items-center justify-between text-xs text-slate-400">
+          <div className="px-5 py-3 bg-app-surface-alt/60 border-t border-app-border flex items-center justify-between text-xs text-slate-400">
             <span>
               Showing {data.items.length} item{data.items.length === 1 ? "" : "s"}
               {data.page.has_more ? " (more available)" : ""}
@@ -205,7 +205,7 @@ function RowsSkeleton() {
   return (
     <div aria-label="Loading recommendations" className="p-5 space-y-3 animate-pulse">
       {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="h-10 bg-app-surfaceAlt rounded" />
+        <div key={i} className="h-10 bg-app-surface-alt rounded" />
       ))}
     </div>
   );
