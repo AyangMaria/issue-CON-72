@@ -39,7 +39,7 @@ func TestWriterBuildsValidBoundedEvent(t *testing.T) {
 	in := validInput()
 	in.Details = map[string]any{
 		"operation":     "sync",
-		"labels":        map[string]any{"team": "platform", "api_token": "do-not-store"},
+		"labels":        map[string]any{"team": "platform", "api_token": "test-token-fixture"},
 		"error_message": "upstream returned Bearer abc.def.ghi",
 	}
 	event, err := w.Append(context.Background(), in)

@@ -303,9 +303,9 @@ components:
     AuditResourceId: {name: resource_id, in: query, schema: {type: string}}
     AuditWorkflowId: {name: workflow_id, in: query, schema: {type: string}}
     AuditCorrelationId: {name: correlation_id, in: query, schema: {type: string}}
-    AuditFamily: {name: family, in: query, schema: {type: string, enum: [resource, discovery, plugin, evidence, recommendation, policy, preflight, authorization, action, worker, verification, rollback, configuration, migration, security]}}
-    AuditResult: {name: result, in: query, schema: {type: string, enum: [requested, allowed, denied, succeeded, failed, pending, inconclusive]}}
-    AuditSeverity: {name: severity, in: query, schema: {type: string, enum: [info, warning, error, critical]}}
+    AuditFamily: {name: family, in: query, schema: {$ref: '#/components/schemas/AuditFamily'}}
+    AuditResult: {name: result, in: query, schema: {$ref: '#/components/schemas/AuditResult'}}
+    AuditSeverity: {name: severity, in: query, schema: {$ref: '#/components/schemas/AuditSeverity'}}
     AuditActorId: {name: actor_id, in: query, schema: {type: string}}
     AuditPluginId: {name: plugin_id, in: query, schema: {type: string}}
     AuditFrom: {name: from, in: query, description: Inclusive recorded-time lower bound., schema: {type: string, format: date-time}}
@@ -370,6 +370,15 @@ components:
       headers: {X-Request-ID: {$ref: '#/components/headers/RequestId'}}
       content: {application/json: {schema: {$ref: '#/components/schemas/AuditIntegrityReport'}}}
   schemas:
+    AuditFamily:
+      type: string
+      enum: [resource, discovery, plugin, evidence, recommendation, policy, preflight, authorization, action, worker, verification, rollback, configuration, migration, security]
+    AuditResult:
+      type: string
+      enum: [requested, allowed, denied, succeeded, failed, pending, inconclusive]
+    AuditSeverity:
+      type: string
+      enum: [info, warning, error, critical]
     JsonObject: {type: object, additionalProperties: true}
     Error: {type: object, required: [error], properties: {error: {type: string}}}
     ActionRequest: {type: object, additionalProperties: false, properties: {mode: {type: string, enum: [approved]}}}
@@ -413,7 +422,7 @@ components:
         id: {type: string}
         idempotency_key: {type: string}
         type: {type: string}
-        family: {$ref: '#/components/parameters/AuditFamily/schema'}
+        family: {$ref: '#/components/schemas/AuditFamily'}
         kind: {type: string, enum: [command, decision, provider_effect, observation, outcome]}
         schema_version: {type: integer, minimum: 1}
         timestamp: {type: string, format: date-time}
@@ -425,8 +434,8 @@ components:
         correlation_id: {type: string}
         causation_id: {type: string}
         workflow: {$ref: '#/components/schemas/AuditWorkflowRefs'}
-        result: {$ref: '#/components/parameters/AuditResult/schema'}
-        severity: {$ref: '#/components/parameters/AuditSeverity/schema'}
+        result: {$ref: '#/components/schemas/AuditResult'}
+        severity: {$ref: '#/components/schemas/AuditSeverity'}
         visibility: {type: string, enum: [summary, detail]}
         reason_code: {type: string}
         summary: {type: string, maxLength: 512}

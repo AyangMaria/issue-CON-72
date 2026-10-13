@@ -123,7 +123,9 @@ func TestReviewCannotExecuteAndSubmissionIsDurableAndIdempotent(t *testing.T) {
 	}
 	correlationID := planResponse.Header().Get("X-Request-ID")
 	auditPage, err := st.QueryAuditEvents(context.Background(), audit.Query{CorrelationID: correlationID, Limit: 10})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(auditPage.Events) != 3 {
 		t.Fatalf("plan audit chain has %d events: %#v", len(auditPage.Events), auditPage.Events)
 	}

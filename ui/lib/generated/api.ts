@@ -332,6 +332,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        AuditFamily: "resource" | "discovery" | "plugin" | "evidence" | "recommendation" | "policy" | "preflight" | "authorization" | "action" | "worker" | "verification" | "rollback" | "configuration" | "migration" | "security";
+        /** @enum {string} */
+        AuditResult: "requested" | "allowed" | "denied" | "succeeded" | "failed" | "pending" | "inconclusive";
+        /** @enum {string} */
+        AuditSeverity: "info" | "warning" | "error" | "critical";
         JsonObject: {
             [key: string]: unknown;
         };
@@ -373,7 +379,7 @@ export interface components {
             id: string;
             idempotency_key: string;
             type: string;
-            family: components["parameters"]["AuditFamily"]["schema"];
+            family: components["schemas"]["AuditFamily"];
             /** @enum {string} */
             kind: "command" | "decision" | "provider_effect" | "observation" | "outcome";
             schema_version: number;
@@ -388,8 +394,8 @@ export interface components {
             correlation_id: string;
             causation_id?: string;
             workflow?: components["schemas"]["AuditWorkflowRefs"];
-            result: components["parameters"]["AuditResult"]["schema"];
-            severity: components["parameters"]["AuditSeverity"]["schema"];
+            result: components["schemas"]["AuditResult"];
+            severity: components["schemas"]["AuditSeverity"];
             /** @enum {string} */
             visibility: "summary" | "detail";
             reason_code: string;
@@ -940,9 +946,9 @@ export interface components {
         AuditResourceId: string;
         AuditWorkflowId: string;
         AuditCorrelationId: string;
-        AuditFamily: "resource" | "discovery" | "plugin" | "evidence" | "recommendation" | "policy" | "preflight" | "authorization" | "action" | "worker" | "verification" | "rollback" | "configuration" | "migration" | "security";
-        AuditResult: "requested" | "allowed" | "denied" | "succeeded" | "failed" | "pending" | "inconclusive";
-        AuditSeverity: "info" | "warning" | "error" | "critical";
+        AuditFamily: components["schemas"]["AuditFamily"];
+        AuditResult: components["schemas"]["AuditResult"];
+        AuditSeverity: components["schemas"]["AuditSeverity"];
         AuditActorId: string;
         AuditPluginId: string;
         /** @description Inclusive recorded-time lower bound. */
