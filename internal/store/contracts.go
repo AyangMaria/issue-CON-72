@@ -83,6 +83,7 @@ type Action struct {
 	ActionType       string           `json:"action_type"`
 	Mode             string           `json:"mode"`
 	IdempotencyKey   string           `json:"idempotency_key"`
+	CorrelationID    string           `json:"correlation_id,omitempty"`
 	RequestedBy      string           `json:"requested_by"`
 	ApprovedBy       string           `json:"approved_by,omitempty"`
 	PolicyDecision   policy.Decision  `json:"policy_decision"`

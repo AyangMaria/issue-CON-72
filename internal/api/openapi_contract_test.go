@@ -31,7 +31,8 @@ func TestOpenAPITracksImplementedRoutes(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"GET /api/action-records", "GET /api/actions", "GET /api/dashboard", "GET /api/health", "GET /api/jobs",
+		"GET /api/action-records", "GET /api/actions", "GET /api/audit", "GET /api/audit/export",
+		"GET /api/audit/health", "GET /api/audit/integrity", "GET /api/dashboard", "GET /api/health", "GET /api/jobs",
 		"GET /api/plugins", "GET /api/resources", "POST /api/discovery",
 		"POST /api/recommendations/generate", "POST /api/recommendations/{recommendation_id}/execute",
 		"POST /api/recommendations/{recommendation_id}/plan", "POST /api/recommendations/{recommendation_id}/recover",

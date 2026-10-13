@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -113,6 +114,19 @@ func (m *Memory) jobEventLocked(job Job, message string) {
 	event.VerificationResult = job.Result
 	m.actions[event.ID] = clone(event)
 	m.nextEventID++
+	correlationID := fmt.Sprintf("action-%d", job.ActionID)
+	if action, ok := m.actionRecords[job.ActionID]; ok && action.CorrelationID != "" {
+		correlationID = action.CorrelationID
+	}
+	previousID := ""
+	for id, candidate := range m.auditEvents {
+		if candidate.CorrelationID == correlationID && (previousID == "" || candidate.RecordedAt.After(m.auditEvents[previousID].RecordedAt) || (candidate.RecordedAt.Equal(m.auditEvents[previousID].RecordedAt) && id > previousID)) {
+			previousID = id
+		}
+	}
+	auditEvent := canonicalActionAudit(event, correlationID, previousID)
+	m.auditEvents[auditEvent.ID] = clone(auditEvent)
+	m.auditIdempotencyIndex[auditEvent.IdempotencyKey] = auditEvent.ID
 	rec := m.recs[job.RecommendationID]
 	if next := recommendationStatusForJob(job.State); next != "" && ValidRecommendationTransition(rec.Status, next) {
 		rec.Status = next

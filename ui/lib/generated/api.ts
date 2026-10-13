@@ -248,6 +248,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Query the audit history
+         * @description Returns a stable, cursor-paginated snapshot of provider-neutral domain audit events.
+         */
+        get: operations["listAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export the audit history
+         * @description Exports the filtered stable snapshot as newline-delimited JSON in recorded-time and event-ID order.
+         */
+        get: operations["exportAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check audit writer health
+         * @description Reports authoritative audit persistence health and any durable publication backlog without exposing event contents.
+         */
+        get: operations["getAuditHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/integrity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check audit record integrity
+         * @description Checks schema validity, duplicate IDs, causation links, and resource references. It does not prove cryptographic immutability.
+         */
+        get: operations["checkAuditIntegrity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -261,6 +341,80 @@ export interface components {
         ActionRequest: {
             /** @enum {string} */
             mode?: "approved";
+        };
+        AuditActor: {
+            type: string;
+            id: string;
+            display?: string;
+        };
+        AuditResourceRef: {
+            id: string;
+            type?: string;
+            provider?: string;
+        };
+        AuditWorkflowRefs: {
+            recommendation_id?: string;
+            policy_id?: string;
+            preflight_id?: string;
+            authorization_id?: string;
+            action_id?: string;
+            attempt_id?: string;
+            plugin_id?: string;
+            verification_id?: string;
+            rollback_id?: string;
+        };
+        AuditRedaction: {
+            applied: boolean;
+            fields?: string[];
+            truncated?: boolean;
+            original_bytes?: number;
+        };
+        AuditEvent: {
+            id: string;
+            idempotency_key: string;
+            type: string;
+            family: components["parameters"]["AuditFamily"]["schema"];
+            /** @enum {string} */
+            kind: "command" | "decision" | "provider_effect" | "observation" | "outcome";
+            schema_version: number;
+            /** Format: date-time */
+            timestamp: string;
+            /** Format: date-time */
+            recorded_at: string;
+            actor: components["schemas"]["AuditActor"];
+            source: string;
+            resource?: components["schemas"]["AuditResourceRef"];
+            organization_id?: string;
+            correlation_id: string;
+            causation_id?: string;
+            workflow?: components["schemas"]["AuditWorkflowRefs"];
+            result: components["parameters"]["AuditResult"]["schema"];
+            severity: components["parameters"]["AuditSeverity"]["schema"];
+            /** @enum {string} */
+            visibility: "summary" | "detail";
+            reason_code: string;
+            summary: string;
+            details?: components["schemas"]["JsonObject"];
+            redaction: components["schemas"]["AuditRedaction"];
+        };
+        AuditPage: {
+            events: components["schemas"]["AuditEvent"][];
+            next_cursor?: string;
+        };
+        AuditHealth: {
+            healthy: boolean;
+            backlog: number;
+            persistence_failures: number;
+            /** Format: date-time */
+            oldest_pending_event?: string;
+            last_error?: string;
+        };
+        AuditIntegrityReport: {
+            valid: boolean;
+            duplicate_ids?: string[];
+            invalid_events?: string[];
+            missing_causation_links?: string[];
+            orphaned_references?: string[];
         };
         Resource: {
             /** @description Version of the universal resource contract. */
@@ -470,6 +624,8 @@ export interface components {
             /** @enum {string} */
             mode: "dry_run" | "approved";
             idempotency_key: string;
+            /** @description Stable audit correlation identifier propagated through worker execution and recovery. */
+            correlation_id?: string;
             requested_by: string;
             approved_by?: string;
             policy_decision: components["schemas"]["PolicyDecision"];
@@ -745,12 +901,58 @@ export interface components {
                 };
             };
         };
+        /** @description Stable page of audit events. */
+        AuditPageResponse: {
+            headers: {
+                "X-Request-ID": components["headers"]["RequestId"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AuditPage"];
+            };
+        };
+        /** @description Audit persistence health and backlog. */
+        AuditHealthResponse: {
+            headers: {
+                "X-Request-ID": components["headers"]["RequestId"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AuditHealth"];
+            };
+        };
+        /** @description Audit referential and schema integrity report. */
+        AuditIntegrityResponse: {
+            headers: {
+                "X-Request-ID": components["headers"]["RequestId"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AuditIntegrityReport"];
+            };
+        };
     };
     parameters: {
         /** @description Numeric recommendation identifier. */
         RecommendationId: number;
         /** @description Stable caller key used to return the original action when a request is repeated. */
         IdempotencyKey: string;
+        AuditResourceId: string;
+        AuditWorkflowId: string;
+        AuditCorrelationId: string;
+        AuditFamily: "resource" | "discovery" | "plugin" | "evidence" | "recommendation" | "policy" | "preflight" | "authorization" | "action" | "worker" | "verification" | "rollback" | "configuration" | "migration" | "security";
+        AuditResult: "requested" | "allowed" | "denied" | "succeeded" | "failed" | "pending" | "inconclusive";
+        AuditSeverity: "info" | "warning" | "error" | "critical";
+        AuditActorId: string;
+        AuditPluginId: string;
+        /** @description Inclusive recorded-time lower bound. */
+        AuditFrom: string;
+        /** @description Exclusive recorded-time upper bound. */
+        AuditTo: string;
+        AuditView: "summary" | "detail";
+        AuditLimit: number;
+        /** @description Opaque stable-snapshot cursor from the previous response. */
+        AuditCursor: string;
     };
     requestBodies: {
         /** @description Explicit action mode; execute and recovery require approved. */
@@ -1027,6 +1229,108 @@ export interface operations {
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["ErrorResponse"];
             403: components["responses"]["ErrorResponse"];
+        };
+    };
+    listAuditEvents: {
+        parameters: {
+            query?: {
+                resource_id?: components["parameters"]["AuditResourceId"];
+                workflow_id?: components["parameters"]["AuditWorkflowId"];
+                correlation_id?: components["parameters"]["AuditCorrelationId"];
+                family?: components["parameters"]["AuditFamily"];
+                result?: components["parameters"]["AuditResult"];
+                severity?: components["parameters"]["AuditSeverity"];
+                actor_id?: components["parameters"]["AuditActorId"];
+                plugin_id?: components["parameters"]["AuditPluginId"];
+                /** @description Inclusive recorded-time lower bound. */
+                from?: components["parameters"]["AuditFrom"];
+                /** @description Exclusive recorded-time upper bound. */
+                to?: components["parameters"]["AuditTo"];
+                view?: components["parameters"]["AuditView"];
+                limit?: components["parameters"]["AuditLimit"];
+                /** @description Opaque stable-snapshot cursor from the previous response. */
+                cursor?: components["parameters"]["AuditCursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["AuditPageResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["ErrorResponse"];
+            403: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
+        };
+    };
+    exportAuditEvents: {
+        parameters: {
+            query?: {
+                resource_id?: components["parameters"]["AuditResourceId"];
+                workflow_id?: components["parameters"]["AuditWorkflowId"];
+                correlation_id?: components["parameters"]["AuditCorrelationId"];
+                family?: components["parameters"]["AuditFamily"];
+                result?: components["parameters"]["AuditResult"];
+                severity?: components["parameters"]["AuditSeverity"];
+                actor_id?: components["parameters"]["AuditActorId"];
+                plugin_id?: components["parameters"]["AuditPluginId"];
+                /** @description Inclusive recorded-time lower bound. */
+                from?: components["parameters"]["AuditFrom"];
+                /** @description Exclusive recorded-time upper bound. */
+                to?: components["parameters"]["AuditTo"];
+                view?: components["parameters"]["AuditView"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newline-delimited AuditEvent objects. */
+            200: {
+                headers: {
+                    "X-Request-ID": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["ErrorResponse"];
+            403: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
+        };
+    };
+    getAuditHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["AuditHealthResponse"];
+            401: components["responses"]["ErrorResponse"];
+            403: components["responses"]["ErrorResponse"];
+            503: components["responses"]["AuditHealthResponse"];
+        };
+    };
+    checkAuditIntegrity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["AuditIntegrityResponse"];
+            401: components["responses"]["ErrorResponse"];
+            403: components["responses"]["ErrorResponse"];
+            409: components["responses"]["AuditIntegrityResponse"];
         };
     };
 }

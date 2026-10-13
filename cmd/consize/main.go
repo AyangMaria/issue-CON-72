@@ -293,13 +293,14 @@ func usage() error {
 
 func runStorage(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: consize storage <status|migrate|backup|restore|reset> -state path [flags]")
+		return fmt.Errorf("usage: consize storage <status|migrate|backup|restore|audit-cleanup|reset> -state path [flags]")
 	}
 	fs := flag.NewFlagSet("storage "+args[0], flag.ContinueOnError)
 	statePath := fs.String("state", "", "Path to the durable Consize state file")
 	databaseURL := fs.String("database-url", os.Getenv("CONSIZE_DATABASE_URL"), "PostgreSQL connection URL (prefer CONSIZE_DATABASE_URL)")
 	backupPath := fs.String("backup", "", "Path to the backup file")
 	confirmation := fs.String("confirm", "", "Required reset confirmation phrase")
+	before := fs.String("before", "", "Exclusive RFC3339 cutoff for audit cleanup")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -307,8 +308,8 @@ func runStorage(args []string) error {
 		return fmt.Errorf("exactly one of -state or -database-url is required")
 	}
 	if *databaseURL != "" {
-		if args[0] != "status" && args[0] != "migrate" {
-			return fmt.Errorf("postgres %s uses the documented pg_dump/pg_restore procedure; only status and migrate are supported here", args[0])
+		if args[0] != "status" && args[0] != "migrate" && args[0] != "audit-cleanup" {
+			return fmt.Errorf("postgres %s uses the documented pg_dump/pg_restore procedure; only status, migrate, and audit-cleanup are supported here", args[0])
 		}
 		if args[0] == "status" {
 			diagnostics, err := store.InspectPostgres(context.Background(), *databaseURL)
@@ -322,6 +323,9 @@ func runStorage(args []string) error {
 			return err
 		}
 		defer st.Close()
+		if args[0] == "audit-cleanup" {
+			return runAuditCleanup(context.Background(), st, *before, *confirmation)
+		}
 		return printJSON(st.StorageDiagnostics(context.Background()))
 	}
 	switch args[0] {
@@ -357,6 +361,13 @@ func runStorage(args []string) error {
 			return err
 		}
 		return printJSON(diagnostics)
+	case "audit-cleanup":
+		st, err := store.OpenDurable(*statePath)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		return runAuditCleanup(context.Background(), st, *before, *confirmation)
 	case "reset":
 		archive, err := store.ResetDurable(*statePath, *confirmation)
 		if err != nil {
@@ -366,6 +377,24 @@ func runStorage(args []string) error {
 	default:
 		return fmt.Errorf("unknown storage command %q", args[0])
 	}
+}
+
+func runAuditCleanup(ctx context.Context, st audit.Store, before, confirmation string) error {
+	if confirmation != "DELETE EXPIRED AUDIT EVENTS" {
+		return fmt.Errorf("audit cleanup requires confirmation: DELETE EXPIRED AUDIT EVENTS")
+	}
+	cutoff, err := time.Parse(time.RFC3339, before)
+	if err != nil {
+		return fmt.Errorf("-before must be an RFC3339 timestamp: %w", err)
+	}
+	if !cutoff.Before(time.Now().UTC()) {
+		return fmt.Errorf("audit cleanup cutoff must be in the past")
+	}
+	removed, err := st.CleanupAuditEvents(ctx, cutoff.UTC(), nil)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"removed": removed, "before": cutoff.UTC(), "active_workflows_preserved": true})
 }
 
 func printJSON(v any) error {

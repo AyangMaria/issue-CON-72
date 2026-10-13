@@ -110,6 +110,7 @@ nav:
       - Resource Model: reference/resource-model.md
       - Supported Platforms: reference/supported-platforms.md
       - API Reference: reference/api.md
+      - Audit Subsystem: engineering/audit-subsystem.md
 
   - Resources:
       - Contributing: resources/contributing.md

@@ -205,6 +205,81 @@ paths:
         '400': {$ref: '#/components/responses/ErrorResponse'}
         '401': {$ref: '#/components/responses/ErrorResponse'}
         '403': {$ref: '#/components/responses/ErrorResponse'}
+  /api/audit:
+    get:
+      tags: [Product]
+      operationId: listAuditEvents
+      summary: Query the audit history
+      description: Returns a stable, cursor-paginated snapshot of provider-neutral domain audit events.
+      parameters:
+        - {$ref: '#/components/parameters/AuditResourceId'}
+        - {$ref: '#/components/parameters/AuditWorkflowId'}
+        - {$ref: '#/components/parameters/AuditCorrelationId'}
+        - {$ref: '#/components/parameters/AuditFamily'}
+        - {$ref: '#/components/parameters/AuditResult'}
+        - {$ref: '#/components/parameters/AuditSeverity'}
+        - {$ref: '#/components/parameters/AuditActorId'}
+        - {$ref: '#/components/parameters/AuditPluginId'}
+        - {$ref: '#/components/parameters/AuditFrom'}
+        - {$ref: '#/components/parameters/AuditTo'}
+        - {$ref: '#/components/parameters/AuditView'}
+        - {$ref: '#/components/parameters/AuditLimit'}
+        - {$ref: '#/components/parameters/AuditCursor'}
+      responses:
+        '200': {$ref: '#/components/responses/AuditPageResponse'}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/audit/export:
+    get:
+      tags: [Product]
+      operationId: exportAuditEvents
+      summary: Export the audit history
+      description: Exports the filtered stable snapshot as newline-delimited JSON in recorded-time and event-ID order.
+      parameters:
+        - {$ref: '#/components/parameters/AuditResourceId'}
+        - {$ref: '#/components/parameters/AuditWorkflowId'}
+        - {$ref: '#/components/parameters/AuditCorrelationId'}
+        - {$ref: '#/components/parameters/AuditFamily'}
+        - {$ref: '#/components/parameters/AuditResult'}
+        - {$ref: '#/components/parameters/AuditSeverity'}
+        - {$ref: '#/components/parameters/AuditActorId'}
+        - {$ref: '#/components/parameters/AuditPluginId'}
+        - {$ref: '#/components/parameters/AuditFrom'}
+        - {$ref: '#/components/parameters/AuditTo'}
+        - {$ref: '#/components/parameters/AuditView'}
+      responses:
+        '200':
+          description: Newline-delimited AuditEvent objects.
+          headers: {X-Request-ID: {$ref: '#/components/headers/RequestId'}}
+          content: {application/x-ndjson: {schema: {type: string}}}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/audit/health:
+    get:
+      tags: [Operational]
+      operationId: getAuditHealth
+      summary: Check audit writer health
+      description: Reports authoritative audit persistence health and any durable publication backlog without exposing event contents.
+      responses:
+        '200': {$ref: '#/components/responses/AuditHealthResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/AuditHealthResponse'}
+  /api/audit/integrity:
+    get:
+      tags: [Operational]
+      operationId: checkAuditIntegrity
+      summary: Check audit record integrity
+      description: Checks schema validity, duplicate IDs, causation links, and resource references. It does not prove cryptographic immutability.
+      responses:
+        '200': {$ref: '#/components/responses/AuditIntegrityResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/AuditIntegrityResponse'}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer}
@@ -225,6 +300,19 @@ components:
       required: false
       description: Stable caller key used to return the original action when a request is repeated.
       schema: {type: string, minLength: 1, maxLength: 200}
+    AuditResourceId: {name: resource_id, in: query, schema: {type: string}}
+    AuditWorkflowId: {name: workflow_id, in: query, schema: {type: string}}
+    AuditCorrelationId: {name: correlation_id, in: query, schema: {type: string}}
+    AuditFamily: {name: family, in: query, schema: {type: string, enum: [resource, discovery, plugin, evidence, recommendation, policy, preflight, authorization, action, worker, verification, rollback, configuration, migration, security]}}
+    AuditResult: {name: result, in: query, schema: {type: string, enum: [requested, allowed, denied, succeeded, failed, pending, inconclusive]}}
+    AuditSeverity: {name: severity, in: query, schema: {type: string, enum: [info, warning, error, critical]}}
+    AuditActorId: {name: actor_id, in: query, schema: {type: string}}
+    AuditPluginId: {name: plugin_id, in: query, schema: {type: string}}
+    AuditFrom: {name: from, in: query, description: Inclusive recorded-time lower bound., schema: {type: string, format: date-time}}
+    AuditTo: {name: to, in: query, description: Exclusive recorded-time upper bound., schema: {type: string, format: date-time}}
+    AuditView: {name: view, in: query, schema: {type: string, enum: [summary, detail]}}
+    AuditLimit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+    AuditCursor: {name: cursor, in: query, description: Opaque stable-snapshot cursor from the previous response., schema: {type: string}}
   requestBodies:
     ActionRequest:
       required: false
@@ -269,10 +357,108 @@ components:
       description: Durable job accepted.
       headers: {X-Request-ID: {$ref: '#/components/headers/RequestId'}}
       content: {application/json: {schema: {type: object, required: [job], properties: {job: {$ref: '#/components/schemas/Job'}}}}}
+    AuditPageResponse:
+      description: Stable page of audit events.
+      headers: {X-Request-ID: {$ref: '#/components/headers/RequestId'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/AuditPage'}}}
+    AuditHealthResponse:
+      description: Audit persistence health and backlog.
+      headers: {X-Request-ID: {$ref: '#/components/headers/RequestId'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/AuditHealth'}}}
+    AuditIntegrityResponse:
+      description: Audit referential and schema integrity report.
+      headers: {X-Request-ID: {$ref: '#/components/headers/RequestId'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/AuditIntegrityReport'}}}
   schemas:
     JsonObject: {type: object, additionalProperties: true}
     Error: {type: object, required: [error], properties: {error: {type: string}}}
     ActionRequest: {type: object, additionalProperties: false, properties: {mode: {type: string, enum: [approved]}}}
+    AuditActor:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties: {type: {type: string}, id: {type: string}, display: {type: string}}
+    AuditResourceRef:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties: {id: {type: string}, type: {type: string}, provider: {type: string}}
+    AuditWorkflowRefs:
+      type: object
+      additionalProperties: false
+      properties:
+        recommendation_id: {type: string}
+        policy_id: {type: string}
+        preflight_id: {type: string}
+        authorization_id: {type: string}
+        action_id: {type: string}
+        attempt_id: {type: string}
+        plugin_id: {type: string}
+        verification_id: {type: string}
+        rollback_id: {type: string}
+    AuditRedaction:
+      type: object
+      additionalProperties: false
+      required: [applied]
+      properties:
+        applied: {type: boolean}
+        fields: {type: array, items: {type: string}}
+        truncated: {type: boolean}
+        original_bytes: {type: integer, minimum: 0}
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      required: [id, idempotency_key, type, family, kind, schema_version, timestamp, recorded_at, actor, source, correlation_id, result, severity, visibility, reason_code, summary, redaction]
+      properties:
+        id: {type: string}
+        idempotency_key: {type: string}
+        type: {type: string}
+        family: {$ref: '#/components/parameters/AuditFamily/schema'}
+        kind: {type: string, enum: [command, decision, provider_effect, observation, outcome]}
+        schema_version: {type: integer, minimum: 1}
+        timestamp: {type: string, format: date-time}
+        recorded_at: {type: string, format: date-time}
+        actor: {$ref: '#/components/schemas/AuditActor'}
+        source: {type: string}
+        resource: {$ref: '#/components/schemas/AuditResourceRef'}
+        organization_id: {type: string}
+        correlation_id: {type: string}
+        causation_id: {type: string}
+        workflow: {$ref: '#/components/schemas/AuditWorkflowRefs'}
+        result: {$ref: '#/components/parameters/AuditResult/schema'}
+        severity: {$ref: '#/components/parameters/AuditSeverity/schema'}
+        visibility: {type: string, enum: [summary, detail]}
+        reason_code: {type: string}
+        summary: {type: string, maxLength: 512}
+        details: {$ref: '#/components/schemas/JsonObject'}
+        redaction: {$ref: '#/components/schemas/AuditRedaction'}
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [events]
+      properties:
+        events: {type: array, items: {$ref: '#/components/schemas/AuditEvent'}}
+        next_cursor: {type: string}
+    AuditHealth:
+      type: object
+      additionalProperties: false
+      required: [healthy, backlog, persistence_failures]
+      properties:
+        healthy: {type: boolean}
+        backlog: {type: integer, minimum: 0}
+        persistence_failures: {type: integer, minimum: 0}
+        oldest_pending_event: {type: string, format: date-time}
+        last_error: {type: string}
+    AuditIntegrityReport:
+      type: object
+      additionalProperties: false
+      required: [valid]
+      properties:
+        valid: {type: boolean}
+        duplicate_ids: {type: array, items: {type: string}}
+        invalid_events: {type: array, items: {type: string}}
+        missing_causation_links: {type: array, items: {type: string}}
+        orphaned_references: {type: array, items: {type: string}}
     Resource:
       type: object
       required: [schema_version, id, type, provider, provider_resource_id, name, environment, owner, region, account, criticality, lifecycle_state, support_status, labels, metadata, current_state, monthly_cost, source_plugin_id, observed_at, first_seen_at, last_seen_at, created_at, updated_at]
@@ -468,6 +654,7 @@ components:
         action_type: {type: string}
         mode: {type: string, enum: [dry_run, approved]}
         idempotency_key: {type: string}
+        correlation_id: {type: string, description: Stable audit correlation identifier propagated through worker execution and recovery.}
         requested_by: {type: string}
         approved_by: {type: string}
         policy_decision: {$ref: '#/components/schemas/PolicyDecision'}
