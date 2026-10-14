@@ -2,6 +2,7 @@
 date: 2026-10-06
 categories:
   - Announcements
+  - Product
 authors:
   - Ujunwa Njoku
 slug: what-we-learned-building-consize-v0-2-0
