@@ -15,6 +15,7 @@ Engineering write-ups, product updates, and honest takes on making cost optimiza
 <div class="blog-filter" role="toolbar" aria-label="Filter blog posts">
   <div class="blog-filter__tabs">
     <button type="button" class="blog-filter__tab is-active" data-filter="all">All</button>
+    <button type="button" class="blog-filter__tab" data-filter="guides">Guides</button>
     <button type="button" class="blog-filter__tab" data-filter="engineering">Engineering</button>
     <button type="button" class="blog-filter__tab" data-filter="finops">FinOps</button>
     <button type="button" class="blog-filter__tab" data-filter="community">Community</button>
