@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/consize-oss/consize/internal/audit"
 	"github.com/consize-oss/consize/pkg/resource"
 )
 
@@ -27,6 +28,8 @@ type Memory struct {
 	recs                    map[int64]Recommendation
 	actionRecords           map[int64]Action
 	actions                 map[int64]ActionEvent
+	auditEvents             map[string]audit.Event
+	auditIdempotencyIndex   map[string]string
 	nextActionID            int64
 	nextEventID             int64
 	nextRecID               int64
@@ -44,6 +47,8 @@ func NewMemory() *Memory {
 		recs:                    map[int64]Recommendation{},
 		actionRecords:           map[int64]Action{},
 		actions:                 map[int64]ActionEvent{},
+		auditEvents:             map[string]audit.Event{},
+		auditIdempotencyIndex:   map[string]string{},
 		nextActionID:            1,
 		nextEventID:             1,
 		nextRecID:               1,
@@ -67,7 +72,7 @@ func (m *Memory) StorageDiagnostics(context.Context) StorageDiagnostics {
 	}
 	out.EntityCounts = map[string]int{
 		"resources": len(m.resources), "recommendations": len(m.recs), "actions": len(m.actionRecords),
-		"audit_events": len(m.actions), "jobs": len(m.jobs),
+		"action_events": len(m.actions), "audit_events": len(m.auditEvents), "jobs": len(m.jobs),
 	}
 	return out
 }
@@ -244,7 +249,7 @@ func (m *Memory) SupersedeRecommendation(_ context.Context, id, replacementID in
 	return m.persistLocked()
 }
 
-func (m *Memory) CreateAction(_ context.Context, action Action) (Action, error) {
+func (m *Memory) CreateAction(ctx context.Context, action Action) (Action, error) {
 	if err := action.Validate(); err != nil {
 		return Action{}, err
 	}
@@ -271,6 +276,12 @@ func (m *Memory) CreateAction(_ context.Context, action Action) (Action, error) 
 	action.SchemaVersion = ContractVersion
 	action.ID = m.nextActionID
 	m.nextActionID++
+	if action.CorrelationID == "" {
+		action.CorrelationID = audit.CorrelationFromContext(ctx)
+	}
+	if action.CorrelationID == "" {
+		action.CorrelationID = fmt.Sprintf("action-%d", action.ID)
+	}
 	action.Status = ActionRequested
 	action.RequestedAt = now
 	action.UpdatedAt = now
@@ -320,7 +331,7 @@ func (m *Memory) TransitionAction(_ context.Context, id int64, status ActionStat
 			return Action{}, err
 		}
 	}
-	if action.RecommendationID != original.RecommendationID || action.ResourceID != original.ResourceID || action.RemediationPath != original.RemediationPath || action.PluginID != original.PluginID || action.PluginVersion != original.PluginVersion || action.ActionType != original.ActionType || action.Mode != original.Mode || action.IdempotencyKey != original.IdempotencyKey || action.RequestedBy != original.RequestedBy || !reflect.DeepEqual(action.Parameters, original.Parameters) || !reflect.DeepEqual(action.PolicyDecision, original.PolicyDecision) {
+	if action.RecommendationID != original.RecommendationID || action.ResourceID != original.ResourceID || action.RemediationPath != original.RemediationPath || action.PluginID != original.PluginID || action.PluginVersion != original.PluginVersion || action.ActionType != original.ActionType || action.Mode != original.Mode || action.IdempotencyKey != original.IdempotencyKey || action.CorrelationID != original.CorrelationID || action.RequestedBy != original.RequestedBy || !reflect.DeepEqual(action.Parameters, original.Parameters) || !reflect.DeepEqual(action.PolicyDecision, original.PolicyDecision) {
 		return Action{}, errors.New("immutable action fields cannot be changed")
 	}
 	now := m.now().UTC()
@@ -342,7 +353,7 @@ func (m *Memory) TransitionAction(_ context.Context, id int64, status ActionStat
 	return clone(action), m.persistLocked()
 }
 
-func (m *Memory) CreateActionEvent(_ context.Context, event ActionEvent) (ActionEvent, error) {
+func (m *Memory) CreateActionEvent(ctx context.Context, event ActionEvent) (ActionEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if event.RecommendationID > 0 {
@@ -363,7 +374,35 @@ func (m *Memory) CreateActionEvent(_ context.Context, event ActionEvent) (Action
 		event.Parameters = map[string]any{}
 	}
 	m.actions[event.ID] = clone(event)
-	return clone(event), m.persistLocked()
+	previousID := ""
+	correlationID := audit.CorrelationFromContext(ctx)
+	if action, ok := m.actionRecords[event.ActionID]; ok && action.CorrelationID != "" {
+		correlationID = action.CorrelationID
+	}
+	if correlationID == "" {
+		correlationID = fmt.Sprintf("action-%d", event.ActionID)
+	}
+	for id, candidate := range m.auditEvents {
+		if candidate.CorrelationID == correlationID && (previousID == "" || candidate.RecordedAt.After(m.auditEvents[previousID].RecordedAt)) {
+			previousID = id
+		}
+	}
+	auditEvent := canonicalActionAudit(event, correlationID, previousID)
+	if err := auditEvent.Validate(); err != nil {
+		delete(m.actions, event.ID)
+		m.nextEventID--
+		return ActionEvent{}, err
+	}
+	m.auditEvents[auditEvent.ID] = clone(auditEvent)
+	m.auditIdempotencyIndex[auditEvent.IdempotencyKey] = auditEvent.ID
+	if err := m.persistLocked(); err != nil {
+		delete(m.actions, event.ID)
+		delete(m.auditEvents, auditEvent.ID)
+		delete(m.auditIdempotencyIndex, auditEvent.IdempotencyKey)
+		m.nextEventID--
+		return ActionEvent{}, err
+	}
+	return clone(event), nil
 }
 
 func (m *Memory) ListActionEvents(context.Context) ([]ActionEvent, error) {

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/consize-oss/consize/internal/audit"
 	"github.com/consize-oss/consize/pkg/resource"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -131,12 +132,12 @@ func (p *Postgres) StorageDiagnostics(ctx context.Context) StorageDiagnostics {
 	if !out.Healthy {
 		out.Error = "database health check failed"
 	}
-	var resources, recommendations, actions, events, jobs int
+	var resources, recommendations, actions, actionEvents, auditEvents, jobs int
 	if err := p.pool.QueryRow(ctx, `SELECT
         (SELECT count(*) FROM resources), (SELECT count(*) FROM recommendations),
-        (SELECT count(*) FROM actions), (SELECT count(*) FROM action_events),
-        (SELECT count(*) FROM jobs)`).Scan(&resources, &recommendations, &actions, &events, &jobs); err == nil {
-		out.EntityCounts = map[string]int{"resources": resources, "recommendations": recommendations, "actions": actions, "audit_events": events, "jobs": jobs}
+		(SELECT count(*) FROM actions), (SELECT count(*) FROM action_events),
+		(SELECT count(*) FROM audit_events), (SELECT count(*) FROM jobs)`).Scan(&resources, &recommendations, &actions, &actionEvents, &auditEvents, &jobs); err == nil {
+		out.EntityCounts = map[string]int{"resources": resources, "recommendations": recommendations, "actions": actions, "action_events": actionEvents, "audit_events": auditEvents, "jobs": jobs}
 	}
 	return out
 }
@@ -374,6 +375,12 @@ func (p *Postgres) CreateAction(ctx context.Context, action Action) (Action, err
 	if err := tx.QueryRow(ctx, `INSERT INTO actions(recommendation_id,resource_id,idempotency_key,status,payload,created_at,updated_at) VALUES($1,$2,$3,$4,'{}',$5,$5) RETURNING id`, action.RecommendationID, action.ResourceID, action.IdempotencyKey, action.Status, now).Scan(&action.ID); err != nil {
 		return Action{}, err
 	}
+	if action.CorrelationID == "" {
+		action.CorrelationID = audit.CorrelationFromContext(ctx)
+	}
+	if action.CorrelationID == "" {
+		action.CorrelationID = fmt.Sprintf("action-%d", action.ID)
+	}
 	payload, _ := marshal(action)
 	if _, err := tx.Exec(ctx, `UPDATE actions SET payload=$2 WHERE id=$1`, action.ID, payload); err != nil {
 		return Action{}, err
@@ -410,7 +417,7 @@ func (p *Postgres) TransitionAction(ctx context.Context, id int64, status Action
 			return Action{}, err
 		}
 	}
-	if action.RecommendationID != original.RecommendationID || action.ResourceID != original.ResourceID || action.RemediationPath != original.RemediationPath || action.PluginID != original.PluginID || action.PluginVersion != original.PluginVersion || action.ActionType != original.ActionType || action.Mode != original.Mode || action.IdempotencyKey != original.IdempotencyKey || action.RequestedBy != original.RequestedBy || !reflect.DeepEqual(action.Parameters, original.Parameters) || !reflect.DeepEqual(action.PolicyDecision, original.PolicyDecision) {
+	if action.RecommendationID != original.RecommendationID || action.ResourceID != original.ResourceID || action.RemediationPath != original.RemediationPath || action.PluginID != original.PluginID || action.PluginVersion != original.PluginVersion || action.ActionType != original.ActionType || action.Mode != original.Mode || action.IdempotencyKey != original.IdempotencyKey || action.CorrelationID != original.CorrelationID || action.RequestedBy != original.RequestedBy || !reflect.DeepEqual(action.Parameters, original.Parameters) || !reflect.DeepEqual(action.PolicyDecision, original.PolicyDecision) {
 		return Action{}, errors.New("immutable action fields cannot be changed")
 	}
 	now := p.now().UTC()
@@ -458,6 +465,30 @@ func (p *Postgres) CreateActionEvent(ctx context.Context, event ActionEvent) (Ac
 	}
 	payload, _ := marshal(event)
 	if _, err := tx.Exec(ctx, `UPDATE action_events SET payload=$2 WHERE id=$1`, event.ID, payload); err != nil {
+		return ActionEvent{}, err
+	}
+	var previousID, correlationID string
+	if event.ActionID > 0 {
+		var actionPayload []byte
+		if err := tx.QueryRow(ctx, `SELECT payload FROM actions WHERE id=$1`, event.ActionID).Scan(&actionPayload); err == nil {
+			action, decodeErr := decode[Action](actionPayload)
+			if decodeErr != nil {
+				return ActionEvent{}, decodeErr
+			}
+			correlationID = action.CorrelationID
+		}
+	}
+	if correlationID == "" {
+		correlationID = audit.CorrelationFromContext(ctx)
+	}
+	if correlationID == "" {
+		correlationID = fmt.Sprintf("action-%d", event.ActionID)
+	}
+	if err := tx.QueryRow(ctx, `SELECT id FROM audit_events WHERE correlation_id=$1 ORDER BY recorded_at DESC,id DESC LIMIT 1`, correlationID).Scan(&previousID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return ActionEvent{}, err
+	}
+	auditEvent := canonicalActionAudit(event, correlationID, previousID)
+	if err := insertAuditEvent(ctx, tx, auditEvent); err != nil {
 		return ActionEvent{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -2,47 +2,43 @@ package audit
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
-type Record struct {
+type JSONLSink struct {
+	path string
+	mu   sync.Mutex
+}
+type legacyRecord struct {
 	Type      string    `json:"type"`
 	Timestamp time.Time `json:"timestamp"`
 	Payload   any       `json:"payload"`
 }
 
-type Sink interface {
-	Write(recordType string, payload any) error
-}
-
-type NoopSink struct{}
-
-func (NoopSink) Write(string, any) error { return nil }
-
-type JSONLSink struct {
-	path string
-}
-
 func NewJSONLSink(path string) (*JSONLSink, error) {
 	if path == "" {
-		return nil, fmt.Errorf("audit path is required")
+		return nil, errors.New("audit path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
 	return &JSONLSink{path: path}, nil
 }
-
-func (s *JSONLSink) Write(recordType string, payload any) error {
-	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
+func (s *JSONLSink) Write(t string, p any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if e != nil {
+		return e
 	}
 	defer f.Close()
-	record := Record{Type: recordType, Timestamp: time.Now().UTC(), Payload: payload}
-	enc := json.NewEncoder(f)
-	return enc.Encode(record)
+	if e = json.NewEncoder(f).Encode(legacyRecord{Type: t, Timestamp: time.Now().UTC(), Payload: p}); e != nil {
+		return fmt.Errorf("encode audit record: %w", e)
+	}
+	return f.Sync()
 }

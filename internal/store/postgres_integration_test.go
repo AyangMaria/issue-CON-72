@@ -110,7 +110,11 @@ func TestPostgresFreshInstallConstraintsAndRestartRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	diagnostics := st.StorageDiagnostics(ctx)
-	if diagnostics.CurrentVersion != 2 || diagnostics.MigrationStatus != MigrationApplied {
+	migrations, err := loadPostgresMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.CurrentVersion != len(migrations) || diagnostics.MigrationStatus != MigrationApplied {
 		t.Fatalf("diagnostics = %+v", diagnostics)
 	}
 	res, err := st.UpsertResource(ctx, completeResource("postgres-resource"))
@@ -192,7 +196,11 @@ func TestPostgresUpgradesPriorSchemaWithoutDataLoss(t *testing.T) {
 	if _, err := st.GetResource(ctx, res.ID); err != nil {
 		t.Fatalf("resource lost during upgrade: %v", err)
 	}
-	if st.diagnostics.MigrationStatus != MigrationApplied || len(st.diagnostics.Migrations) != 1 || st.diagnostics.Migrations[0].ToVersion != 2 {
+	migrations, err = loadPostgresMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.diagnostics.MigrationStatus != MigrationApplied || len(st.diagnostics.Migrations) != len(migrations)-1 || st.diagnostics.Migrations[len(st.diagnostics.Migrations)-1].ToVersion != len(migrations) {
 		t.Fatalf("migration diagnostics = %+v", st.diagnostics)
 	}
 }

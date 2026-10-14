@@ -93,6 +93,17 @@ func (p *Postgres) persistJobEffects(ctx context.Context, tx pgx.Tx, job Job, me
 	if _, err := tx.Exec(ctx, `UPDATE action_events SET payload=$2 WHERE id=$1`, event.ID, eventPayload); err != nil {
 		return err
 	}
+	correlationID := action.CorrelationID
+	if correlationID == "" {
+		correlationID = fmt.Sprintf("action-%d", job.ActionID)
+	}
+	var previousID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM audit_events WHERE correlation_id=$1 ORDER BY recorded_at DESC,id DESC LIMIT 1`, correlationID).Scan(&previousID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if err := insertAuditEvent(ctx, tx, canonicalActionAudit(event, correlationID, previousID)); err != nil {
+		return err
+	}
 	if next := recommendationStatusForJob(job.State); next != "" && ValidRecommendationTransition(rec.Status, next) {
 		rec.Status = next
 	}

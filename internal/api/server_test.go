@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/consize-oss/consize/internal/audit"
 	"github.com/consize-oss/consize/internal/auth"
 	"github.com/consize-oss/consize/internal/bootstrap"
 	"github.com/consize-oss/consize/internal/policy"
@@ -115,8 +117,20 @@ func TestReviewCannotExecuteAndSubmissionIsDurableAndIdempotent(t *testing.T) {
 		server.Handler().ServeHTTP(w, r)
 		return w
 	}
-	if w := request("/api/recommendations/1/plan", `{"mode":"approved"}`); w.Code != http.StatusOK {
+	planResponse := request("/api/recommendations/1/plan", `{"mode":"approved"}`)
+	if w := planResponse; w.Code != http.StatusOK {
 		t.Fatalf("plan: %d %s", w.Code, w.Body)
+	}
+	correlationID := planResponse.Header().Get("X-Request-ID")
+	auditPage, err := st.QueryAuditEvents(context.Background(), audit.Query{CorrelationID: correlationID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditPage.Events) != 3 {
+		t.Fatalf("plan audit chain has %d events: %#v", len(auditPage.Events), auditPage.Events)
+	}
+	if auditPage.Events[1].CausationID != auditPage.Events[0].ID {
+		t.Fatalf("planned event does not link to request: %#v", auditPage.Events)
 	}
 	for _, action := range client.Actions() {
 		if action.GetVerb() == "update" {
@@ -194,5 +208,66 @@ func TestAuthorizationProtectsMutationAndDerivesActorFromToken(t *testing.T) {
 	}
 	if w := request(http.MethodPost, "/api/recommendations/1/execute", "operator-token-at-least-24-characters", `{"mode":"approved","actor":"spoofed"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("actor override: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestAuditQuerySummaryFiltersAndExport(t *testing.T) {
+	server, st, _ := apiFixture(t)
+	w := audit.NewWriter(st)
+	for i, visibility := range []audit.Visibility{audit.VisibilitySummary, audit.VisibilityDetail} {
+		_, err := w.Append(context.Background(), audit.Input{
+			IdempotencyKey: fmt.Sprintf("audit-api-%d", i), Type: "policy.evaluated",
+			Family: audit.FamilyPolicy, Kind: audit.KindDecision,
+			Actor: audit.Actor{Type: "user", ID: "operator"}, Source: "test",
+			Resource: &audit.ResourceRef{ID: "test"}, CorrelationID: "workflow-1",
+			Workflow: audit.WorkflowRefs{PolicyID: "policy-1", PluginID: "policy-plugin"},
+			Result:   audit.ResultAllowed, Severity: audit.SeverityInfo, Visibility: visibility,
+			ReasonCode: "policy_allowed", Summary: "Policy allowed the operation",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	request := func(path string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		return recorder
+	}
+	response := request("/api/audit?workflow_id=policy-1&plugin_id=policy-plugin&view=summary")
+	if response.Code != http.StatusOK {
+		t.Fatalf("query: %d %s", response.Code, response.Body)
+	}
+	var page audit.Page
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || page.Events[0].Visibility != audit.VisibilitySummary {
+		t.Fatalf("summary filter returned %#v", page.Events)
+	}
+	exported := request("/api/audit/export?correlation_id=workflow-1")
+	if exported.Code != http.StatusOK || exported.Header().Get("Content-Type") != "application/x-ndjson" {
+		t.Fatalf("export: %d %s", exported.Code, exported.Body)
+	}
+	lines := strings.Split(strings.TrimSpace(exported.Body.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("exported %d lines: %s", len(lines), exported.Body.String())
+	}
+	if bad := request("/api/audit?limit=0"); bad.Code != http.StatusBadRequest {
+		t.Fatalf("invalid limit accepted: %d", bad.Code)
+	}
+	if bad := request("/api/audit?cursor=broken"); bad.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cursor status = %d", bad.Code)
+	}
+}
+
+func TestAuditHealthAndIntegrityEndpoints(t *testing.T) {
+	server, _, _ := apiFixture(t)
+	for _, path := range []string{"/api/audit/health", "/api/audit/integrity"} {
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
 	}
 }

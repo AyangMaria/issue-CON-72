@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/consize-oss/consize/internal/audit"
 	"github.com/consize-oss/consize/pkg/resource"
 )
 
@@ -19,6 +20,7 @@ type diskState struct {
 	Recommendations map[int64]Recommendation     `json:"recommendations"`
 	ActionRecords   map[int64]Action             `json:"action_records"`
 	Actions         map[int64]ActionEvent        `json:"actions"`
+	AuditEvents     map[string]audit.Event       `json:"audit_events"`
 	Jobs            map[int64]Job                `json:"jobs"`
 	NextActionID    int64                        `json:"next_action_id"`
 	NextEventID     int64                        `json:"next_event_id"`
@@ -27,7 +29,7 @@ type diskState struct {
 
 const (
 	minimumStateVersion = 1
-	currentStateVersion = 5
+	currentStateVersion = 6
 )
 
 // OpenDurable owns one local state file for its entire lifetime; other processes fail closed.
@@ -66,7 +68,7 @@ func OpenDurable(path string) (*Memory, error) {
 		m.Close()
 		return nil, fmt.Errorf("state schema cannot start: %w; restore a compatible backup or run `consize storage status -state %s`", err, path)
 	}
-	if state.Resources == nil || state.Recommendations == nil || state.ActionRecords == nil || state.Actions == nil || state.Jobs == nil || state.NextActionID < 1 || state.NextEventID < 1 || state.NextRecID < 1 {
+	if state.Resources == nil || state.Recommendations == nil || state.ActionRecords == nil || state.Actions == nil || state.AuditEvents == nil || state.Jobs == nil || state.NextActionID < 1 || state.NextEventID < 1 || state.NextRecID < 1 {
 		m.Close()
 		return nil, errors.New("invalid state schema")
 	}
@@ -78,6 +80,11 @@ func OpenDurable(path string) (*Memory, error) {
 	m.recs = state.Recommendations
 	m.actionRecords = state.ActionRecords
 	m.actions = state.Actions
+	m.auditEvents = state.AuditEvents
+	m.auditIdempotencyIndex = map[string]string{}
+	for id, event := range state.AuditEvents {
+		m.auditIdempotencyIndex[event.IdempotencyKey] = id
+	}
 	m.jobs = state.Jobs
 	m.nextActionID = state.NextActionID
 	m.nextEventID = state.NextEventID
@@ -183,6 +190,12 @@ func migrateState(state *diskState) (bool, error) {
 		state.Version = 5
 		migrated = true
 	}
+	if state.Version == 5 {
+		state.AuditEvents = map[string]audit.Event{}
+		state.Migrations = append(state.Migrations, MigrationRecord{FromVersion: 5, ToVersion: 6, Name: "provider-neutral-audit-events"})
+		state.Version = 6
+		migrated = true
+	}
 	if state.Version != currentStateVersion {
 		return false, fmt.Errorf("unsupported state schema version %d", state.Version)
 	}
@@ -244,6 +257,19 @@ func validateState(state diskState) error {
 				return errors.New("missing or mismatched audit action in durable state")
 			}
 		}
+	}
+	seenAuditKeys := map[string]string{}
+	for id, event := range state.AuditEvents {
+		if id == "" || event.ID != id {
+			return errors.New("invalid audit event key in durable state")
+		}
+		if err := event.Validate(); err != nil {
+			return fmt.Errorf("invalid durable audit event %q: %w", id, err)
+		}
+		if previous, ok := seenAuditKeys[event.IdempotencyKey]; ok && previous != id {
+			return errors.New("duplicate audit idempotency key in durable state")
+		}
+		seenAuditKeys[event.IdempotencyKey] = id
 	}
 	for id, action := range state.ActionRecords {
 		if id < 1 || action.ID != id || id >= state.NextActionID {
@@ -334,7 +360,7 @@ func (m *Memory) persistLocked() (err error) {
 	}()
 	state := diskState{
 		Version: currentStateVersion, Migrations: append([]MigrationRecord(nil), m.diagnostics.Migrations...), Resources: m.resources,
-		Recommendations: m.recs, ActionRecords: m.actionRecords, Actions: m.actions, Jobs: m.jobs,
+		Recommendations: m.recs, ActionRecords: m.actionRecords, Actions: m.actions, AuditEvents: m.auditEvents, Jobs: m.jobs,
 		NextActionID: m.nextActionID, NextEventID: m.nextEventID, NextRecID: m.nextRecID,
 	}
 	data, err := json.Marshal(state)

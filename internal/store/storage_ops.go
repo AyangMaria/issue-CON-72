@@ -52,7 +52,7 @@ func InspectDurable(path string) (StorageDiagnostics, error) {
 		return diagnostics, err
 	}
 	tmp := NewMemory()
-	tmp.resources, tmp.recs, tmp.actionRecords, tmp.actions, tmp.jobs = state.Resources, state.Recommendations, state.ActionRecords, state.Actions, state.Jobs
+	tmp.resources, tmp.recs, tmp.actionRecords, tmp.actions, tmp.auditEvents, tmp.jobs = state.Resources, state.Recommendations, state.ActionRecords, state.Actions, state.AuditEvents, state.Jobs
 	if err := tmp.rebuildIndexesLocked(); err != nil {
 		diagnostics.MigrationStatus = MigrationInvalid
 		diagnostics.Error = err.Error()
@@ -60,7 +60,7 @@ func InspectDurable(path string) (StorageDiagnostics, error) {
 	}
 	diagnostics.Healthy = true
 	diagnostics.Migrations = append([]MigrationRecord(nil), state.Migrations...)
-	diagnostics.EntityCounts = map[string]int{"resources": len(state.Resources), "recommendations": len(state.Recommendations), "actions": len(state.ActionRecords), "audit_events": len(state.Actions), "jobs": len(state.Jobs)}
+	diagnostics.EntityCounts = map[string]int{"resources": len(state.Resources), "recommendations": len(state.Recommendations), "actions": len(state.ActionRecords), "action_events": len(state.Actions), "audit_events": len(state.AuditEvents), "jobs": len(state.Jobs)}
 	return diagnostics, nil
 }
 
