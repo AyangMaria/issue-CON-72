@@ -56,17 +56,37 @@ export const recommendationListItemSchema = z.object({
     provider: z.string(),
     environment: z.string(),
     namespace: z.string().optional(),
+    // Optional searchable metadata used by the frontend mock; confirm with the backend.
+    tags: z.record(z.string()).optional(),
     region: z.string().optional(),
+    // Optional fields for the new list design; older API responses still work.
+    kind: z.enum(["compute", "database", "storage", "ai", "gpu"]).optional(),
+    description: z.string().optional(),
+    scope: z.string().optional(),
+    inspect: z.boolean().optional(),
   }),
   owner: z.string(),
   policy_id: z.string(),
   risk: riskSchema,
   confidence: confidenceSchema,
+  // New mock fields: confirm these names with the backend before integration.
+  // The score is supplied independently from the legacy confidence category.
+  confidence_percentage: z.number().min(0).max(100).nullable().optional(),
+  confidence_note: z.string().optional(),
+  change_summary: z.object({ current: z.string(), proposed: z.string() }).optional(),
+  savings_note: z.string().optional(),
+  primary_action: z.enum(["github_pull_request", "schedule", "direct_apply", "request_approval"]).optional(),
   estimated_savings: moneySchema,
   status: z.enum(["actionable", "blocked", "pending_approval", "planned", "executed", "superseded"]),
   available_remediations: z.array(remediationSchema),
 });
 export type RecommendationListItem = z.infer<typeof recommendationListItemSchema>;
+
+// The demo supplies evaluated_at; agree this field with the real backend at integration.
+// Keep it optional so an older response without it still loads (the header shows an em dash).
+export const recommendationListSchema = pageEnvelope(recommendationListItemSchema).extend({
+  evaluated_at: z.string().datetime().nullable().optional(),
+});
 
 // -- Section 8.1 Dashboard summary ----------------------------------------
 export const dashboardSummarySchema = z.object({

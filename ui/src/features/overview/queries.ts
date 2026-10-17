@@ -4,9 +4,8 @@ import {
   auditEventListSchema,
   capabilityListSchema,
   dashboardSummarySchema,
-  pageEnvelope,
   recommendationDetailSchema,
-  recommendationListItemSchema,
+  recommendationListSchema,
 } from "@/schemas";
 
 export const queryKeys = {
@@ -32,8 +31,6 @@ export function useDashboardSummary(scope: { environment?: string; window?: stri
     refetchInterval: 30_000,
   });
 }
-
-const recommendationListSchema = pageEnvelope(recommendationListItemSchema);
 
 export function useRecommendationList(filters: Record<string, string | undefined> = {}) {
   const query = new URLSearchParams(

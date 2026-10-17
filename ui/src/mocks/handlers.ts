@@ -10,6 +10,10 @@ export type Scenario =
   | "backend-down";
 
 let scenario: Scenario = "healthy";
+// Demo only: pretend the evaluation finished four minutes before this mock session.
+// Keep this timestamp across list refetches so the displayed age can increase.
+// A fresh page load starts a new mock session; real data will use the backend's evaluation time.
+const mockEvaluatedAt = new Date(Date.now() - 4 * 60_000).toISOString();
 export function setScenario(next: Scenario) {
   scenario = next;
 }
@@ -24,7 +28,7 @@ const money = (
   basis,
 });
 
-const baseRecommendations: RecommendationListItem[] = [
+const legacyRecommendations: RecommendationListItem[] = [
   {
     id: "rec_01",
     version: "7",
@@ -35,6 +39,7 @@ const baseRecommendations: RecommendationListItem[] = [
       provider: "kubernetes",
       environment: "production",
       namespace: "payments",
+      tags: { team: "payments", tier: "1" },
       region: "us-east-1",
     },
     owner: "platform",
@@ -60,6 +65,7 @@ const baseRecommendations: RecommendationListItem[] = [
     resource: {
       id: "res_02",
       name: "orders-aurora-cluster",
+      tags: { team: "checkout", engine: "aurora" },
       provider: "aws_rds",
       environment: "production",
       region: "us-east-1",
@@ -82,6 +88,7 @@ const baseRecommendations: RecommendationListItem[] = [
       provider: "kubernetes",
       environment: "production",
       namespace: "ml-ops",
+      tags: { team: "ml-ops", hardware: "gpu" },
       region: "us-east-1",
     },
     owner: "ml-ops",
@@ -103,6 +110,7 @@ const baseRecommendations: RecommendationListItem[] = [
       provider: "kubernetes",
       environment: "production",
       namespace: "payments",
+      tags: { team: "payments", tier: "1" },
       region: "us-east-1",
     },
     owner: "platform",
@@ -117,6 +125,109 @@ const baseRecommendations: RecommendationListItem[] = [
   },
 ];
 
+// Sample values from the new Figma, not live infrastructure measurements.
+// Keep the older examples above available for existing detail links.
+const baseRecommendations: RecommendationListItem[] = [
+  {
+    id: "rec_01", version: "7", title: "Right-size payment-service-deployment",
+    resource: {
+      id: "res_01", name: "payment-service-deployment", provider: "kubernetes", environment: "production",
+      namespace: "payments", region: "us-east-1", tags: { team: "payments", tier: "1" },
+      kind: "compute", description: "ns: payments · Tier 1 SRE", scope: "prod-us-east-1", inspect: true,
+    },
+    owner: "core-pay-sre", policy_id: "prod-conservative", risk: "low", confidence: "high",
+    estimated_savings: money(420000), savings_note: "-48% cost", status: "actionable",
+    change_summary: { current: "c6i.2xl (8C / 16G)", proposed: "c6i.xl (4C / 8G)" },
+    confidence_percentage: 98, confidence_note: "30d P95", primary_action: "github_pull_request",
+    available_remediations: [
+      { method: "review", label: "Review change", enabled: true },
+      { method: "github_pull_request", label: "Create PR", enabled: true, plugin_instance_id: "github-gitops:infra" },
+    ],
+  },
+  {
+    id: "rec_02", version: "3", title: "Downscale orders-aurora-cluster",
+    resource: {
+      id: "res_02", name: "orders-aurora-cluster", provider: "aws_rds", environment: "production",
+      region: "us-east-1", tags: { team: "data-infra", engine: "aurora" },
+      kind: "database", description: "engine: aurora-pg15 · multi-az", scope: "us-east-1",
+    },
+    owner: "data-infra", policy_id: "db-safe-change", risk: "medium", confidence: "medium",
+    estimated_savings: money(1280000), savings_note: "-50% mem alloc", status: "pending_approval",
+    change_summary: { current: "db.r6g.4xlarge", proposed: "db.r6g.2xlarge" },
+    confidence_percentage: 94, confidence_note: "14d P99", primary_action: "schedule",
+    available_remediations: [
+      { method: "review", label: "Review change", enabled: true },
+      { method: "schedule", label: "Schedule", enabled: false, disabled_reason: "approval_required" },
+    ],
+  },
+  {
+    id: "rec_05", version: "1", title: "Optimize analytics-raw-events storage",
+    resource: {
+      id: "res_05", name: "analytics-raw-events", provider: "aws_s3", environment: "datalake",
+      region: "aws-global", tags: { team: "data-platform", storage: "events" },
+      kind: "storage", description: "s3://prod-events-lake · 42TB", scope: "aws-global",
+    },
+    owner: "data-platform", policy_id: "storage-lifecycle", risk: "low", confidence: "high",
+    estimated_savings: money(195000), savings_note: "-68% GB-mo", status: "actionable",
+    change_summary: { current: "S3 Std 42TB", proposed: "Glacier Instant" },
+    confidence_percentage: 99, confidence_note: "Access: 90d", primary_action: "direct_apply",
+    available_remediations: [{ method: "direct_apply", label: "Apply directly", enabled: true }],
+  },
+  {
+    id: "rec_06", version: "1", title: "Optimize customer-support-agent-llm routing",
+    resource: {
+      id: "res_06", name: "customer-support-agent-llm", provider: "bedrock_openai", environment: "production",
+      region: "global-api", tags: { team: "genai-sre", service: "support" },
+      kind: "ai", description: "Gateway: Bedrock/OpenAI Router", scope: "global-api",
+    },
+    owner: "genai-sre", policy_id: "model-routing", risk: "low", confidence: "high",
+    estimated_savings: money(540000), savings_note: "-72% token cost", status: "actionable",
+    change_summary: { current: "gpt-4-32k direct", proposed: "Sonnet 3.5 + Cache" },
+    confidence_percentage: 96, confidence_note: "Eval bench", primary_action: "direct_apply",
+    available_remediations: [{ method: "direct_apply", label: "Apply directly", enabled: true }],
+  },
+  {
+    id: "rec_07", version: "1", title: "Right-size staging-worker-pool",
+    resource: {
+      id: "res_07", name: "staging-worker-pool", provider: "kubernetes", environment: "staging",
+      namespace: "staging-workers", region: "us-east-1", tags: { team: "qa-devops", pods: "8" },
+      kind: "compute", description: "ns: staging-workers · 8 pods", scope: "stage-us-east-1",
+    },
+    owner: "qa-devops", policy_id: "non-prod-auto", risk: "low", confidence: "high",
+    estimated_savings: money(264000), savings_note: "8 pods tuned", status: "actionable",
+    change_summary: { current: "req: 4C / 12G", proposed: "req: 1C / 3G" },
+    confidence_percentage: 99, confidence_note: "60d idle check", primary_action: "direct_apply",
+    available_remediations: [{ method: "direct_apply", label: "Apply directly", enabled: true }],
+  },
+  {
+    id: "rec_08", version: "1", title: "Use spot fallback for ml-training-spot-fallback",
+    resource: {
+      id: "res_08", name: "ml-training-spot-fallback", provider: "aws_ec2", environment: "production",
+      region: "us-west-2", tags: { team: "ml-ops", hardware: "gpu" },
+      kind: "gpu", description: "nodegroup: g5.12xlarge · On-Demand", scope: "prod-us-west-2",
+    },
+    owner: "ml-ops", policy_id: "gpu-approval", risk: "high", confidence: "medium",
+    estimated_savings: money(680000), savings_note: "-62% GPU rate", status: "blocked",
+    change_summary: { current: "On-Demand GPU Pool", proposed: "Spot Interruption Mix" },
+    confidence_percentage: 89, confidence_note: "Spot reb 7d", primary_action: "request_approval",
+    available_remediations: [{ method: "review", label: "Request approval", enabled: true }],
+  },
+  {
+    id: "rec_09", version: "1", title: "Tune checkout-gateway-api replicas",
+    resource: {
+      id: "res_09", name: "checkout-gateway-api", provider: "kubernetes", environment: "production",
+      namespace: "checkout", region: "us-east-1", tags: { team: "checkout-eng", service: "gateway" },
+      kind: "compute", description: "ns: checkout · HPA min 12", scope: "prod-us-east-1",
+    },
+    owner: "checkout-eng", policy_id: "prod-conservative", risk: "low", confidence: "high",
+    estimated_savings: money(145000), savings_note: "-33% static base", status: "actionable",
+    change_summary: { current: "Min Replicas: 12", proposed: "Min Replicas: 8" },
+    confidence_percentage: 95, confidence_note: "21d traffic", primary_action: "github_pull_request",
+    available_remediations: [{ method: "github_pull_request", label: "Create PR", enabled: true }],
+  },
+];
+
+
 // Detail payloads. Defaults describe a healthy Kubernetes right-size;
 // each recommendation overrides only what makes it different.
 function buildDetail(rec: RecommendationListItem, extra: Partial<RecommendationDetail> = {}): RecommendationDetail {
@@ -124,8 +235,12 @@ function buildDetail(rec: RecommendationListItem, extra: Partial<RecommendationD
     ...rec,
     summary: `Requests on ${rec.resource.name} are well above observed peak usage. Lowering them keeps headroom over the 14-day P95 while reducing reserved capacity.`,
     algorithm: { id: "headroom-p95", version: "1.0.0" },
-    current: { "CPU request": "8 vCPU", "Memory request": "16 GiB" },
-    proposed: { "CPU request": "4 vCPU", "Memory request": "8 GiB" },
+    current: rec.change_summary
+      ? { Configuration: rec.change_summary.current }
+      : { "CPU request": "8 vCPU", "Memory request": "16 GiB" },
+    proposed: rec.change_summary
+      ? { Configuration: rec.change_summary.proposed }
+      : { "CPU request": "4 vCPU", "Memory request": "8 GiB" },
     confidence_assessment: {
       observed_history: "14 days",
       required_history: "14 days",
@@ -241,8 +356,34 @@ const detailOverrides: Record<string, Partial<RecommendationDetail>> = {
 };
 
 function detailFor(id: string): RecommendationDetail | undefined {
-  const rec = baseRecommendations.find((r) => r.id === id);
-  return rec ? buildDetail(rec, detailOverrides[id]) : undefined;
+  const legacy = legacyRecommendations.find((r) => r.id === id);
+  const rec = baseRecommendations.find((r) => r.id === id) ?? legacy;
+  if (!rec) return undefined;
+
+  // New design examples have list summaries, not detailed measurements.
+  // Do not reuse Kubernetes CPU evidence for storage, model routing, or GPU examples.
+  if (!legacy && rec.change_summary) {
+    const decision = rec.status === "blocked" ? "blocked"
+      : rec.status === "pending_approval" ? "requires_approval" : "allowed";
+    return buildDetail(rec, {
+      summary: `${rec.title}. Current: ${rec.change_summary.current}. Suggested: ${rec.change_summary.proposed}.`,
+      algorithm: { id: "design-example", version: "1.0.0" },
+      confidence_assessment: {
+        observed_history: "No detailed observations",
+        required_history: "Not specified",
+        coverage_ratio: 0,
+        reasons: ["Detailed evidence is unavailable for this example."],
+      },
+      evidence: [],
+      policy: {
+        decision,
+        reasons: decision === "allowed" ? [] : ["This change requires review before it can proceed."],
+        verification: [],
+      },
+      audit: [],
+    });
+  }
+  return buildDetail(rec, detailOverrides[id]);
 }
 
 export const handlers = [
@@ -293,7 +434,27 @@ export const handlers = [
       if (wanted) items = items.filter((item) => read(item) === wanted);
     }
 
-    return HttpResponse.json({ items, page: { next_cursor: null, has_more: false } });
+
+    // Demo search matches resource names, owners, namespaces, and optional tags.
+    const searchTerms = (q.get("q") ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (searchTerms.length) {
+      items = items.filter((item) => {
+        const tags = Object.entries(item.resource.tags ?? {})
+          .flatMap(([key, value]) => [key, value, `${key}:${value}`, `${key}=${value}`]);
+        const searchableText = [
+          item.title, item.resource.name, item.resource.namespace, item.owner,
+          item.resource.provider, item.resource.environment, item.resource.region,
+          item.policy_id, ...tags,
+        ].filter(Boolean).join(" ").toLowerCase();
+        return searchTerms.every((term) => searchableText.includes(term));
+      });
+    }
+
+    return HttpResponse.json({
+      items,
+      evaluated_at: scenario === "empty-cluster" ? null : mockEvaluatedAt,
+      page: { next_cursor: null, has_more: false },
+    });
   }),
 
 

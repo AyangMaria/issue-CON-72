@@ -14,8 +14,6 @@ import {
   Activity,
   ChevronsLeft,
   ChevronsRight,
-  Moon,
-  Sun,
   Settings,
   LogOut,
 } from "lucide-react";
@@ -182,45 +180,11 @@ function WorkspaceMenu({ collapsed }: { collapsed: boolean }) {
             <div className="text-xs font-medium text-fg">Acme Corp Infra</div>
             <div className="text-[10px] text-slate-400 mt-0.5">FinOps Lead / SRE · Active Guard</div>
           </div>
-          <ThemeMenuItem />
           <MenuItem icon={Settings} label="Settings" disabled reason="Not wired yet" />
           <MenuItem icon={LogOut} label="Sign out" disabled reason="Not wired yet" />
         </div>
       )}
     </div>
-  );
-}
-
-function ThemeMenuItem() {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-
-  useEffect(() => {
-    // layout.tsx's blocking script already applied the correct theme
-    // before paint. This only reads it back to label the button —
-    const current = document.documentElement.dataset.theme;
-    setTheme(current === "light" ? "light" : "dark");
-  }, []);
-
-  function toggle() {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    document.documentElement.dataset.theme = next;
-    window.localStorage.setItem("consize-theme", next);
-  }
-
-  return (
-    <button
-      role="menuitem"
-      onClick={toggle}
-      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-xs text-fg-secondary hover:bg-slate-800/60 text-left"
-    >
-      {theme === "dark" ? (
-        <Sun className="w-4 h-4 text-amber-400" />
-      ) : (
-        <Moon className="w-4 h-4 text-slate-400" />
-      )}
-      Switch to {theme === "dark" ? "light" : "dark"} mode
-    </button>
   );
 }
 
