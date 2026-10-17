@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/consize-oss/consize/internal/audit"
 	"github.com/consize-oss/consize/internal/auth"
 	"github.com/consize-oss/consize/internal/bootstrap"
 	"github.com/consize-oss/consize/internal/policy"
@@ -22,6 +25,33 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestHealthReportsDurableStorageStatus(t *testing.T) {
+	server, _, _ := apiFixture(t)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("health status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Storage store.StorageDiagnostics `json:"storage"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Storage.Durable || !response.Storage.Healthy {
+		t.Fatalf("storage diagnostics = %+v", response.Storage)
+	}
+	if response.Storage.CurrentVersion == 0 || response.Storage.LoadedVersion != response.Storage.CurrentVersion {
+		t.Fatalf("storage versions = loaded %d, current %d", response.Storage.LoadedVersion, response.Storage.CurrentVersion)
+	}
+	if response.Storage.MigrationStatus != store.MigrationCurrent {
+		t.Fatalf("migration status = %q", response.Storage.MigrationStatus)
+	}
+	if len(response.Storage.Indexes) == 0 {
+		t.Fatal("storage diagnostics omitted required indexes")
+	}
+}
 
 type apiMetrics struct{}
 
@@ -58,11 +88,17 @@ func apiFixture(t *testing.T) (*Server, *store.Memory, *fake.Clientset) {
 	if err := plugins.RegisterMetrics(apiMetrics{}); err != nil {
 		t.Fatal(err)
 	}
-	res := resource.Resource{ID: "test", Type: resource.TypeKubernetesDeployment, Owner: "team", Environment: "development", Metadata: map[string]any{"namespace": "test", "name": "app"}, CurrentState: map[string]any{"memory_request_bytes": int64(512 * 1024 * 1024), "memory_limit_bytes": int64(1024 * 1024 * 1024)}}
+	res := resource.Resource{
+		ID: "test", Type: resource.TypeKubernetesDeployment, Provider: resource.ProviderKubernetes,
+		ProviderResourceID: "test/app", Name: "app", Account: "test-cluster", Region: "local",
+		Owner: "team", Environment: resource.EnvDevelopment, Criticality: resource.CriticalityLow,
+		Metadata:     map[string]any{"namespace": "test", "name": "app"},
+		CurrentState: map[string]any{"memory_request_bytes": int64(512 * 1024 * 1024), "memory_limit_bytes": int64(1024 * 1024 * 1024)},
+	}
 	if _, err := st.UpsertResource(context.Background(), res); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateRecommendation(context.Background(), store.Recommendation{ResourceID: "test", PluginID: k8splugin.ID, ActionType: "k8s.patch_resources", Confidence: "medium", Parameters: map[string]any{"patch": k8splugin.PatchDiff{Resource: "memory", CurrentReq: 512 * 1024 * 1024, ProposedReq: 384 * 1024 * 1024, CurrentLimit: 1024 * 1024 * 1024, ProposedLimit: 1024 * 1024 * 1024}}}); err != nil {
+	if _, err := st.CreateRecommendation(context.Background(), store.Recommendation{ResourceID: "test", PluginID: k8splugin.ID, AlgorithmID: "test-algorithm", EvidenceRefs: []string{"metrics:test:baseline"}, ActionType: "k8s.patch_resources", Confidence: "medium", Parameters: map[string]any{"patch": k8splugin.PatchDiff{Resource: "memory", CurrentReq: 512 * 1024 * 1024, ProposedReq: 384 * 1024 * 1024, CurrentLimit: 1024 * 1024 * 1024, ProposedLimit: 1024 * 1024 * 1024}}}); err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewServer(st, plugins, policy.NewEngine(), bootstrap.Config{Verification: bootstrap.VerificationConfig{Enabled: true, MetricsPluginID: "metrics", Wait: "5m", RollbackOnFailure: true, RollbackOnTimeout: true, MaxMemoryP95IncreaseRatio: 1.25, MaxCPUP95IncreaseRatio: 1.5}})
@@ -81,8 +117,20 @@ func TestReviewCannotExecuteAndSubmissionIsDurableAndIdempotent(t *testing.T) {
 		server.Handler().ServeHTTP(w, r)
 		return w
 	}
-	if w := request("/api/recommendations/1/plan", `{"mode":"approved"}`); w.Code != http.StatusOK {
+	planResponse := request("/api/recommendations/1/plan", `{"mode":"approved"}`)
+	if w := planResponse; w.Code != http.StatusOK {
 		t.Fatalf("plan: %d %s", w.Code, w.Body)
+	}
+	correlationID := planResponse.Header().Get("X-Request-ID")
+	auditPage, err := st.QueryAuditEvents(context.Background(), audit.Query{CorrelationID: correlationID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditPage.Events) != 3 {
+		t.Fatalf("plan audit chain has %d events: %#v", len(auditPage.Events), auditPage.Events)
+	}
+	if auditPage.Events[1].CausationID != auditPage.Events[0].ID {
+		t.Fatalf("planned event does not link to request: %#v", auditPage.Events)
 	}
 	for _, action := range client.Actions() {
 		if action.GetVerb() == "update" {
@@ -160,5 +208,66 @@ func TestAuthorizationProtectsMutationAndDerivesActorFromToken(t *testing.T) {
 	}
 	if w := request(http.MethodPost, "/api/recommendations/1/execute", "operator-token-at-least-24-characters", `{"mode":"approved","actor":"spoofed"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("actor override: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestAuditQuerySummaryFiltersAndExport(t *testing.T) {
+	server, st, _ := apiFixture(t)
+	w := audit.NewWriter(st)
+	for i, visibility := range []audit.Visibility{audit.VisibilitySummary, audit.VisibilityDetail} {
+		_, err := w.Append(context.Background(), audit.Input{
+			IdempotencyKey: fmt.Sprintf("audit-api-%d", i), Type: "policy.evaluated",
+			Family: audit.FamilyPolicy, Kind: audit.KindDecision,
+			Actor: audit.Actor{Type: "user", ID: "operator"}, Source: "test",
+			Resource: &audit.ResourceRef{ID: "test"}, CorrelationID: "workflow-1",
+			Workflow: audit.WorkflowRefs{PolicyID: "policy-1", PluginID: "policy-plugin"},
+			Result:   audit.ResultAllowed, Severity: audit.SeverityInfo, Visibility: visibility,
+			ReasonCode: "policy_allowed", Summary: "Policy allowed the operation",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	request := func(path string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		return recorder
+	}
+	response := request("/api/audit?workflow_id=policy-1&plugin_id=policy-plugin&view=summary")
+	if response.Code != http.StatusOK {
+		t.Fatalf("query: %d %s", response.Code, response.Body)
+	}
+	var page audit.Page
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || page.Events[0].Visibility != audit.VisibilitySummary {
+		t.Fatalf("summary filter returned %#v", page.Events)
+	}
+	exported := request("/api/audit/export?correlation_id=workflow-1")
+	if exported.Code != http.StatusOK || exported.Header().Get("Content-Type") != "application/x-ndjson" {
+		t.Fatalf("export: %d %s", exported.Code, exported.Body)
+	}
+	lines := strings.Split(strings.TrimSpace(exported.Body.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("exported %d lines: %s", len(lines), exported.Body.String())
+	}
+	if bad := request("/api/audit?limit=0"); bad.Code != http.StatusBadRequest {
+		t.Fatalf("invalid limit accepted: %d", bad.Code)
+	}
+	if bad := request("/api/audit?cursor=broken"); bad.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cursor status = %d", bad.Code)
+	}
+}
+
+func TestAuditHealthAndIntegrityEndpoints(t *testing.T) {
+	server, _, _ := apiFixture(t)
+	for _, path := range []string{"/api/audit/health", "/api/audit/integrity"} {
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
 	}
 }

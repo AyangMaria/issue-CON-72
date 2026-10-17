@@ -62,6 +62,9 @@ func TestOrchestratorPlansDryRunWithoutExecuting(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("audit events = %d, want 2", len(events))
 	}
+	if events[0].ActionID == 0 || events[0].ActionID != events[1].ActionID || events[0].RecommendationID != rec.ID {
+		t.Fatalf("audit traceability missing: %#v", events)
+	}
 }
 
 func TestLegacyOrchestratorCannotBypassDurableSafety(t *testing.T) {
@@ -88,20 +91,20 @@ func TestLegacyOrchestratorCannotBypassDurableSafety(t *testing.T) {
 
 func testResourceAndRecommendation() (resource.Resource, store.Recommendation) {
 	res := resource.Resource{
-		ID:          "k8s:prod:checkout-api",
-		Type:        resource.TypeKubernetesDeployment,
-		Provider:    resource.ProviderKubernetes,
-		Name:        "checkout-api",
-		Environment: resource.EnvProduction,
-		Owner:       "payments-team",
+		ID: "k8s:prod:checkout-api", Type: resource.TypeKubernetesDeployment,
+		Provider: resource.ProviderKubernetes, ProviderResourceID: "prod/checkout-api",
+		Name: "checkout-api", Account: "prod-cluster", Region: "us-east-1",
+		Environment: resource.EnvProduction, Owner: "payments-team",
 		Criticality: resource.CriticalityHigh,
 		Metadata:    map[string]any{"namespace": "prod", "name": "checkout-api"},
 	}
 	rec := store.Recommendation{
-		ResourceID: "k8s:prod:checkout-api",
-		PluginID:   "kubernetes-action",
-		ActionType: "k8s.patch_resources",
-		Title:      "Reduce memory request",
+		ResourceID:   "k8s:prod:checkout-api",
+		PluginID:     "kubernetes-action",
+		AlgorithmID:  "test-headroom",
+		EvidenceRefs: []string{"metrics:test:window-1"},
+		ActionType:   "k8s.patch_resources",
+		Title:        "Reduce memory request",
 		Parameters: map[string]any{
 			"patch": map[string]any{
 				"resource":         "memory",

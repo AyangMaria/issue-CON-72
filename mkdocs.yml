@@ -1,6 +1,6 @@
 site_name: Consize
 site_url: https://docs.consizehq.com
-site_description: Safe, Automated Action for Kubernetes
+site_description: Safely optimize cloud, AI and SaaS resources with automated policies, guardrails, and built-in rollback.
 site_author: Consize OSS
 repo_url: https://github.com/consize-oss/consize
 repo_name: consize-oss/consize
@@ -17,27 +17,26 @@ theme:
   icon:
     repo: fontawesome/brands/github
   palette:
-    - scheme: default          # light, this is now the default
+    - scheme: default        
       primary: teal
       accent: green
       toggle:
-        icon: material/brightness-7
+        icon: material/weather-night
         name: Switch to dark mode
-    - scheme: slate            # dark
+    - scheme: slate      
       primary: teal
       accent: green
       toggle:
-        icon: material/brightness-4
+        icon: material/weather-sunny
         name: Switch to light mode
   features:
     - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
     - navigation.top
     - navigation.instant
     - navigation.instant.progress
-    - navigation.tracking
     - navigation.indexes
-    - toc.follow
     - search.suggest
     - search.highlight
     - content.code.copy
@@ -58,13 +57,44 @@ plugins:
         - Engineering
         - Guides
         - Comparisons
+        - FinOps
+        - Security
+        - Community
+        - Product
       archive: true
       archive_date_format: yyyy
       authors: true
+  - llmstxt:
+      markdown_description: >
+        Consize is an open-source safety engine for infrastructure cost
+        optimization. It finds waste across Kubernetes and cloud resources,
+        applies changes in small verified steps, and rolls back automatically
+        if anything degrades.
+      full_output: llms-full.txt
+      sections:
+        Get started:
+          - getting-started/get-started.md: Overview and quickstart
+          - getting-started/sandbox.md: Interactive Docker sandbox
+          - getting-started/installation.md: Production Helm install
+        Guides:
+          - guides/rightsizing.md: Kubernetes rightsizing, why percentiles not averages
+          - guides/observability.md
+          - guides/environments.md
+          - concepts/architecture.md: How Consize works end to end
+          - concepts/safety-net.md: The safety decision matrix (BLOCK/SPLIT/REJECT/etc)
+        Reference:
+          - reference/configuration.md
+          - reference/resource-model.md
+          - reference/supported-platforms.md
+          - reference/api.md
+        Resources:
+          - resources/decisions.md: How and why decisions get documented
+          - resources/faq.md
+          - resources/troubleshooting.md
 
 nav:
   - Get started:
-      - Get started: getting-started/get-started.md
+      - Overview: getting-started/get-started.md
       - Interactive Sandbox: getting-started/sandbox.md
       - Production Installation: getting-started/installation.md
 
@@ -77,16 +107,16 @@ nav:
 
   - Reference:
       - Configuration: reference/configuration.md
+      - Resource Model: reference/resource-model.md
       - Supported Platforms: reference/supported-platforms.md
       - API Reference: reference/api.md
+      - Audit Subsystem: engineering/audit-subsystem.md
 
   - Resources:
-      - Contributing: contributing/index.md
-      - Testing: contributing/testing.md
-      - E2E Tests: contributing/e2e.md
-      - Decisions: contributing/decisions.md
-      - CI Security Policy: engineering/ci-security.md
-      - Repository Security: engineering/repository-security.md
+      - Contributing: resources/contributing.md
+      - Testing: resources/testing.md
+      - E2E Tests: resources/e2e.md
+      - Decisions: resources/decisions.md
       - Roadmap: resources/roadmap.md
       - FAQ: resources/faq.md
       - Troubleshooting: resources/troubleshooting.md
@@ -120,6 +150,7 @@ extra_javascript:
   - javascripts/mermaid-init.js
   - javascripts/page-feedback.js
   - javascripts/search-suggestions.js
+  - javascripts/copy-page.js
 
 extra:
   social:
@@ -132,3 +163,4 @@ extra_css:
   - stylesheets/extra.css
   - stylesheets/blog.css
   - stylesheets/blog-post.css
+  
