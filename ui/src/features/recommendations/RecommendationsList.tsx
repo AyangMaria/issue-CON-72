@@ -52,7 +52,7 @@ export function RecommendationsList() {
 
   const { data, isPending, isError, error } = useRecommendationList(filters);
   // Interim: facet options come from an unfiltered query so the dropdowns
-  // don't shrink as you filter. Replace with a backend facets endpoint.
+  //Replace with a backend facets endpoint.
   const facets = useRecommendationList({});
 
   function setFilter(key: FilterKey, value: string) {
