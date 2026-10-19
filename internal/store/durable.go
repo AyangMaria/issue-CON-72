@@ -7,42 +7,44 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/consize-oss/consize/internal/audit"
 	"github.com/consize-oss/consize/pkg/resource"
-	"golang.org/x/sys/unix"
 )
 
 type diskState struct {
 	Version         int                          `json:"version"`
+	Migrations      []MigrationRecord            `json:"migrations,omitempty"`
 	Resources       map[string]resource.Resource `json:"resources"`
 	Recommendations map[int64]Recommendation     `json:"recommendations"`
+	ActionRecords   map[int64]Action             `json:"action_records"`
 	Actions         map[int64]ActionEvent        `json:"actions"`
+	AuditEvents     map[string]audit.Event       `json:"audit_events"`
 	Jobs            map[int64]Job                `json:"jobs"`
 	NextActionID    int64                        `json:"next_action_id"`
+	NextEventID     int64                        `json:"next_event_id"`
 	NextRecID       int64                        `json:"next_recommendation_id"`
 }
 
-const currentStateVersion = 2
+const (
+	minimumStateVersion = 1
+	currentStateVersion = 6
+)
 
 // OpenDurable owns one local state file for its entire lifetime; other processes fail closed.
 func OpenDurable(path string) (*Memory, error) {
 	if path == "" {
 		return nil, errors.New("state_path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, err
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := acquireStateLock(path)
 	if err != nil {
 		return nil, err
-	}
-	if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		lock.Close()
-		return nil, fmt.Errorf("state store already owned: %w", err)
 	}
 	m := NewMemory()
 	m.path = path
 	m.lockFile = lock
+	m.diagnostics = StorageDiagnostics{Backend: "json-file", Durable: true, Healthy: true, CurrentVersion: currentStateVersion, LoadedVersion: currentStateVersion, TargetVersion: currentStateVersion, MigrationStatus: MigrationCurrent, Indexes: RequiredIndexes()}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := m.persistLocked(); err != nil {
@@ -55,19 +57,18 @@ func OpenDurable(path string) (*Memory, error) {
 		m.Close()
 		return nil, err
 	}
-	var state diskState
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&state); err != nil {
-		m.Close()
-		return nil, fmt.Errorf("invalid state file: %w", err)
-	}
-	migrated, err := migrateState(&state)
+	state, err := decodeDiskState(data)
 	if err != nil {
 		m.Close()
 		return nil, err
 	}
-	if state.Resources == nil || state.Recommendations == nil || state.Actions == nil || state.Jobs == nil || state.NextActionID < 1 || state.NextRecID < 1 {
+	originalVersion := state.Version
+	migrated, err := migrateState(&state)
+	if err != nil {
+		m.Close()
+		return nil, fmt.Errorf("state schema cannot start: %w; restore a compatible backup or run `consize storage status -state %s`", err, path)
+	}
+	if state.Resources == nil || state.Recommendations == nil || state.ActionRecords == nil || state.Actions == nil || state.AuditEvents == nil || state.Jobs == nil || state.NextActionID < 1 || state.NextEventID < 1 || state.NextRecID < 1 {
 		m.Close()
 		return nil, errors.New("invalid state schema")
 	}
@@ -77,10 +78,28 @@ func OpenDurable(path string) (*Memory, error) {
 	}
 	m.resources = state.Resources
 	m.recs = state.Recommendations
+	m.actionRecords = state.ActionRecords
 	m.actions = state.Actions
+	m.auditEvents = state.AuditEvents
+	m.auditIdempotencyIndex = map[string]string{}
+	for id, event := range state.AuditEvents {
+		m.auditIdempotencyIndex[event.IdempotencyKey] = id
+	}
 	m.jobs = state.Jobs
 	m.nextActionID = state.NextActionID
+	m.nextEventID = state.NextEventID
 	m.nextRecID = state.NextRecID
+	if err := m.rebuildIndexesLocked(); err != nil {
+		m.Close()
+		return nil, fmt.Errorf("rebuild storage indexes: %w", err)
+	}
+	m.diagnostics.CurrentVersion = state.Version
+	m.diagnostics.LoadedVersion = originalVersion
+	m.diagnostics.Migrations = append([]MigrationRecord(nil), state.Migrations...)
+	if migrated {
+		m.diagnostics.MigrationStatus = MigrationApplied
+		m.diagnostics.CurrentVersion = currentStateVersion
+	}
 	if migrated {
 		if err := m.persistLocked(); err != nil {
 			m.Close()
@@ -91,23 +110,125 @@ func OpenDurable(path string) (*Memory, error) {
 }
 
 func migrateState(state *diskState) (bool, error) {
-	switch state.Version {
-	case currentStateVersion:
-		return false, nil
-	case 1:
+	migrated := false
+	if state.Version < minimumStateVersion || state.Version > currentStateVersion {
+		return false, fmt.Errorf("unsupported state schema version %d (supported %d through %d)", state.Version, minimumStateVersion, currentStateVersion)
+	}
+	if state.Version == 1 {
 		// v2 adds discovery provenance to Resource. The fields are optional for
 		// manually registered v1 resources and are populated on rediscovery.
-		state.Version = currentStateVersion
-		return true, nil
-	default:
+		state.Version = 2
+		state.Migrations = append(state.Migrations, MigrationRecord{FromVersion: 1, ToVersion: 2, Name: "resource-discovery-provenance"})
+		migrated = true
+	}
+	if state.Version == 2 {
+		// v3 adds explicit model, support, and lifecycle versions. Immutable
+		// provider identity is never guessed during migration.
+		for id, res := range state.Resources {
+			res.SchemaVersion = resource.CurrentSchemaVersion
+			if res.LifecycleState == "" {
+				res.LifecycleState = resource.LifecycleActive
+			}
+			res.SupportStatus = resource.SupportForType(res.Type)
+			if res.ObservedAt.IsZero() {
+				res.ObservedAt = firstStoredTime(res.UpdatedAt, res.CreatedAt)
+			}
+			if res.FirstSeenAt.IsZero() {
+				res.FirstSeenAt = firstStoredTime(res.CreatedAt, res.ObservedAt)
+			}
+			if res.LastSeenAt.IsZero() {
+				res.LastSeenAt = firstStoredTime(res.ObservedAt, res.UpdatedAt, res.CreatedAt)
+			}
+			state.Resources[id] = res
+		}
+		state.Version = 3
+		state.Migrations = append(state.Migrations, MigrationRecord{FromVersion: 2, ToVersion: 3, Name: "resource-lifecycle-contract"})
+		migrated = true
+	}
+	if state.Version == 3 {
+		// v4 separates durable actions from append-only action events. Existing
+		// event IDs stay intact; new action IDs begin in their own sequence.
+		state.ActionRecords = map[int64]Action{}
+		state.NextEventID = state.NextActionID
+		state.NextActionID = 1
+		for id, rec := range state.Recommendations {
+			rec.SchemaVersion = ContractVersion
+			if rec.AlgorithmVersion == "" {
+				rec.AlgorithmVersion = "1"
+			}
+			if rec.RecommendationType == "" {
+				rec.RecommendationType = rec.ActionType
+			}
+			if rec.AlgorithmID == "" {
+				rec.AlgorithmID = "legacy-unknown"
+			}
+			if len(rec.EvidenceRefs) == 0 {
+				rec.EvidenceRefs = []string{fmt.Sprintf("legacy:recommendation:%d", id)}
+			}
+			if rec.SavingsEstimate.Classification == "" {
+				rec.SavingsEstimate = SavingsEstimate{Classification: SavingsEstimated, AmountMonthly: rec.EstimatedSavingsMonthly, CalculatedAt: rec.CreatedAt}
+			}
+			state.Recommendations[id] = rec
+		}
+		state.Version = 4
+		state.Migrations = append(state.Migrations, MigrationRecord{FromVersion: 3, ToVersion: 4, Name: "separate-action-contract"})
+		migrated = true
+	}
+	if state.Version == 4 {
+		// v5 records deterministic migration history. Runtime query indexes are
+		// derived from canonical entities and rebuilt after validation.
+		for id, rec := range state.Recommendations {
+			if rec.AlgorithmID == "" {
+				rec.AlgorithmID = "legacy-unknown"
+			}
+			if len(rec.EvidenceRefs) == 0 {
+				rec.EvidenceRefs = []string{fmt.Sprintf("legacy:recommendation:%d", id)}
+			}
+			state.Recommendations[id] = rec
+		}
+		state.Migrations = append(state.Migrations, MigrationRecord{FromVersion: 4, ToVersion: 5, Name: "migration-history-and-derived-indexes"})
+		state.Version = 5
+		migrated = true
+	}
+	if state.Version == 5 {
+		state.AuditEvents = map[string]audit.Event{}
+		state.Migrations = append(state.Migrations, MigrationRecord{FromVersion: 5, ToVersion: 6, Name: "provider-neutral-audit-events"})
+		state.Version = 6
+		migrated = true
+	}
+	if state.Version != currentStateVersion {
 		return false, fmt.Errorf("unsupported state schema version %d", state.Version)
 	}
+	return migrated, nil
+}
+
+func firstStoredTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 func validateState(state diskState) error {
+	if state.Version != currentStateVersion {
+		return fmt.Errorf("state validation requires schema version %d, got %d", currentStateVersion, state.Version)
+	}
+	if err := validateMigrationHistory(state.Migrations); err != nil {
+		return err
+	}
 	for id, res := range state.Resources {
-		if id == "" || res.ID != id || res.Type == "" {
-			return errors.New("invalid resource identity in durable state")
+		if id == "" || res.ID != id {
+			return errors.New("invalid resource key in durable state")
+		}
+		if err := res.Validate(); err != nil {
+			return fmt.Errorf("invalid durable resource %q: %w", id, err)
+		}
+		for otherID, other := range state.Resources {
+			if otherID != id && resource.SameIdentity(res, other) {
+				return fmt.Errorf("duplicate resource identity in durable state: %q and %q", id, otherID)
+			}
 		}
 	}
 	for id, rec := range state.Recommendations {
@@ -117,9 +238,12 @@ func validateState(state diskState) error {
 		if _, ok := state.Resources[rec.ResourceID]; !ok {
 			return errors.New("missing recommendation resource in durable state")
 		}
+		if rec.AlgorithmID == "" || len(rec.EvidenceRefs) == 0 {
+			return errors.New("recommendation is missing algorithm or evidence provenance")
+		}
 	}
 	for id, event := range state.Actions {
-		if id < 1 || event.ID != id || id >= state.NextActionID {
+		if id < 1 || event.ID != id || id >= state.NextEventID {
 			return errors.New("invalid action sequence in durable state")
 		}
 		if event.RecommendationID > 0 {
@@ -127,11 +251,59 @@ func validateState(state diskState) error {
 				return errors.New("missing audit recommendation in durable state")
 			}
 		}
+		if event.ActionID > 0 {
+			action, ok := state.ActionRecords[event.ActionID]
+			if !ok || (event.RecommendationID > 0 && action.RecommendationID != event.RecommendationID) {
+				return errors.New("missing or mismatched audit action in durable state")
+			}
+		}
+	}
+	seenAuditKeys := map[string]string{}
+	for id, event := range state.AuditEvents {
+		if id == "" || event.ID != id {
+			return errors.New("invalid audit event key in durable state")
+		}
+		if err := event.Validate(); err != nil {
+			return fmt.Errorf("invalid durable audit event %q: %w", id, err)
+		}
+		if previous, ok := seenAuditKeys[event.IdempotencyKey]; ok && previous != id {
+			return errors.New("duplicate audit idempotency key in durable state")
+		}
+		seenAuditKeys[event.IdempotencyKey] = id
+	}
+	for id, action := range state.ActionRecords {
+		if id < 1 || action.ID != id || id >= state.NextActionID {
+			return errors.New("invalid action sequence in durable state")
+		}
+		rec, ok := state.Recommendations[action.RecommendationID]
+		if !ok || rec.ResourceID != action.ResourceID {
+			return errors.New("invalid action recommendation link in durable state")
+		}
+		if err := action.Validate(); err != nil {
+			return fmt.Errorf("invalid durable action %d: %w", id, err)
+		}
+	}
+	seenIdempotency := map[string]int64{}
+	for id, action := range state.ActionRecords {
+		if existing, ok := seenIdempotency[action.IdempotencyKey]; ok && existing != id {
+			return errors.New("duplicate action idempotency key in durable state")
+		}
+		seenIdempotency[action.IdempotencyKey] = id
 	}
 	for id, job := range state.Jobs {
-		rec, ok := state.Recommendations[id]
+		recommendationID := job.RecommendationID
+		if recommendationID == 0 {
+			recommendationID = id
+		}
+		rec, ok := state.Recommendations[recommendationID]
 		if !ok || job.ID != id || job.Resource.ID != rec.ResourceID || job.Plan.ResourceID != rec.ResourceID || job.Plan.PluginID != rec.PluginID || job.Actor == "" {
 			return errors.New("invalid safety job identity in durable state")
+		}
+		if job.ActionID > 0 {
+			action, ok := state.ActionRecords[job.ActionID]
+			if !ok || action.RecommendationID != recommendationID {
+				return errors.New("invalid safety job action link in durable state")
+			}
 		}
 		switch job.State {
 		case "prepared", "applying", "waiting_rollout", "verifying", "rollback_pending", "rolling_back", "rollback_verifying", "verified", "rolled_back", "manual_intervention", "cancelled":
@@ -143,6 +315,18 @@ func validateState(state diskState) error {
 		}
 		if !Terminal(job.State) && job.Deadline.IsZero() {
 			return errors.New("missing action deadline in durable state")
+		}
+	}
+	return nil
+}
+
+func validateMigrationHistory(records []MigrationRecord) error {
+	for i, record := range records {
+		if record.FromVersion < minimumStateVersion || record.ToVersion != record.FromVersion+1 || record.ToVersion > currentStateVersion || record.Name == "" {
+			return fmt.Errorf("invalid migration history entry %d", i)
+		}
+		if i > 0 && records[i-1].ToVersion != record.FromVersion {
+			return fmt.Errorf("non-contiguous migration history at entry %d", i)
 		}
 	}
 	return nil
@@ -175,38 +359,18 @@ func (m *Memory) persistLocked() (err error) {
 		}
 	}()
 	state := diskState{
-		Version: currentStateVersion, Resources: m.resources,
-		Recommendations: m.recs, Actions: m.actions, Jobs: m.jobs,
-		NextActionID: m.nextActionID, NextRecID: m.nextRecID,
+		Version: currentStateVersion, Migrations: append([]MigrationRecord(nil), m.diagnostics.Migrations...), Resources: m.resources,
+		Recommendations: m.recs, ActionRecords: m.actionRecords, Actions: m.actions, AuditEvents: m.auditEvents, Jobs: m.jobs,
+		NextActionID: m.nextActionID, NextEventID: m.nextEventID, NextRecID: m.nextRecID,
 	}
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(m.path), ".consize-state-*")
-	if err != nil {
+	if _, err := os.Stat(filepath.Dir(m.path)); err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
-	defer file.Close()
-	if _, err = file.Write(data); err != nil {
-		return err
-	}
-	if err = file.Sync(); err != nil {
-		return err
-	}
-	if err = file.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(file.Name(), m.path); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(m.path))
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return atomicWrite(m.path, data, 0600)
 }
 
 func clone[T any](value T) T {

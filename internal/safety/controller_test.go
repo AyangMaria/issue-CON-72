@@ -137,7 +137,7 @@ type harness struct {
 
 func TestSubmissionReassessesLegacyConfidence(t *testing.T) {
 	h := newHarness(t)
-	rec, err := h.st.CreateRecommendation(h.ctx, store.Recommendation{ResourceID: "test", PluginID: h.action.ID(), ActionType: "resize", AlgorithmID: recommender.BuiltInHeadroomAlgorithmID, Confidence: "high"})
+	rec, err := h.st.CreateRecommendation(h.ctx, store.Recommendation{ResourceID: "test", PluginID: h.action.ID(), ActionType: "resize", AlgorithmID: recommender.BuiltInHeadroomAlgorithmID, EvidenceRefs: []string{"metrics:test:baseline"}, Confidence: "high"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,11 +168,16 @@ func newHarness(t *testing.T) *harness {
 	if err = h.plugins.RegisterMetrics(h.metrics); err != nil {
 		t.Fatal(err)
 	}
-	_, err = h.st.UpsertResource(h.ctx, resource.Resource{ID: "test", Type: "test.resource", Name: "test", Environment: "development", Owner: "team", CurrentState: map[string]any{"size": 100}})
+	_, err = h.st.UpsertResource(h.ctx, resource.Resource{
+		ID: "test", Type: "test.resource", Provider: "test-provider",
+		ProviderResourceID: "resources/test", Name: "test", Account: "test-account", Region: "local",
+		Environment: resource.EnvDevelopment, Owner: "team", Criticality: resource.CriticalityLow,
+		CurrentState: map[string]any{"size": 100},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := h.st.CreateRecommendation(h.ctx, store.Recommendation{ResourceID: "test", PluginID: h.action.ID(), ActionType: "resize", Confidence: "medium"})
+	rec, err := h.st.CreateRecommendation(h.ctx, store.Recommendation{ResourceID: "test", PluginID: h.action.ID(), ActionType: "resize", AlgorithmID: "test-algorithm", EvidenceRefs: []string{"metrics:test:baseline"}, Confidence: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +397,7 @@ func TestStorageFailurePreventsMutation(t *testing.T) {
 func TestActiveActionReservesResourceAcrossRecommendations(t *testing.T) {
 	h := newHarness(t)
 	h.submit(t)
-	rec, err := h.st.CreateRecommendation(h.ctx, store.Recommendation{ResourceID: "test", PluginID: h.action.ID(), ActionType: "resize", Confidence: "medium"})
+	rec, err := h.st.CreateRecommendation(h.ctx, store.Recommendation{ResourceID: "test", PluginID: h.action.ID(), ActionType: "resize", AlgorithmID: "test-algorithm", EvidenceRefs: []string{"metrics:test:baseline"}, Confidence: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}

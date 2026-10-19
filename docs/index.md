@@ -1,19 +1,22 @@
 ---
-title: Overview
+title: "Consize Documentation"
 hide:
   - toc
 ---
 
-<div class="consize-hero" markdown>
+<div class="consize-hero consize-hero--split" markdown>
 
+<div class="consize-hero__text" markdown>
 
-# <span class="consize-gradient">Welcome to</span> Consize Documentation
+# <span class="consize-gradient">Optimize safely</span> with Consize
 
-Learn how to use consize to analyze your infrastructure, identify optimization opportunities, and apply safer changes with built-in guardrails without turning cost optimization into a production risk.
+Learn how to use consize to analyze, identify and apply safer changes with built-in guardrails without turning cost optimization into a production risk.
 
 <div class="consize-hero__actions" markdown>
 [Get started](getting-started/get-started.md){ .md-button .md-button--primary }
 [Try the Interactive Sandbox](getting-started/sandbox.md){ .md-button }
+</div>
+
 </div>
 
 <div class="consize-hero__cmd" markdown>
@@ -32,7 +35,7 @@ docker run -p 3000:3000 -p 8080:8080 -it ghcr.io/consize-oss/consize-sandbox:lat
 
 Consize continuously evaluates your infrastructure and turns resource usage data into actionable recommendations. You decide how changes are applied through reviewable pull requests against your existing Infrastructure-as-Code workflow, or as guarded runtime changes within configured boundaries.
 
-## Explore the Platform
+## How it works
 
 Go from zero to a verified rightsizing change against a real workload.
 

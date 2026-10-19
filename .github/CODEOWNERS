@@ -10,4 +10,15 @@
 /internal/repositorysecurity/ @TheInvincibleRalph
 /docs/engineering/repository-security.md @TheInvincibleRalph
 /docs/engineering/ci-security.md @TheInvincibleRalph
+/cmd/gitleaks-report/ @TheInvincibleRalph
+/internal/gitleaksreport/ @TheInvincibleRalph
+/scripts/security/ @TheInvincibleRalph
+/.gitleaks.toml @TheInvincibleRalph
+/docs/engineering/secret-scanning.md @TheInvincibleRalph
 /docs/requirements.txt @TheInvincibleRalph
+/openapi/ @TheInvincibleRalph
+/redocly.yaml @TheInvincibleRalph
+/scripts/api/ @TheInvincibleRalph
+/ui/lib/generated/api.ts @TheInvincibleRalph
+/internal/api/openapi_contract_test.go @TheInvincibleRalph
+/docs/engineering/api-contract.md @TheInvincibleRalph

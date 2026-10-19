@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 type Server struct {
 	controller *safety.Controller
 	auth       *auth.Authorizer
+	audit      *audit.Writer
 	actionMu   sync.Mutex
 	st         store.Store
 	plugins    *plugin.Manager
@@ -47,6 +49,7 @@ type Dashboard struct {
 	Recommendations []store.Recommendation       `json:"recommendations"`
 	Plugins         []PluginStatus               `json:"plugins"`
 	Actions         []store.ActionEvent          `json:"actions"`
+	ActionRecords   []store.Action               `json:"action_records"`
 	Policy          PolicySummary                `json:"policy"`
 }
 
@@ -82,6 +85,9 @@ func NewServer(st store.Store, plugins *plugin.Manager, policies *policy.Engine,
 		return nil, err
 	}
 	s := &Server{st: st, plugins: plugins, policies: policies, cfg: cfg, auth: authorizer}
+	if auditStore, ok := st.(audit.Store); ok {
+		s.audit = audit.NewWriter(auditStore)
+	}
 	if durable, ok := st.(store.JobStore); ok {
 		s.controller = safety.New(durable, plugins, policies, cfg.Verification, cfg.Recommender)
 	}
@@ -105,6 +111,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/recommendations/generate", s.protect(auth.RoleOperator, s.handleGenerateRecommendation))
 	mux.HandleFunc("/api/recommendations/", s.protect(s.recommendationRole, s.handleRecommendationAction))
 	mux.HandleFunc("/api/actions", s.protect(auth.RoleViewer, s.handleActions))
+	mux.HandleFunc("/api/action-records", s.protect(auth.RoleViewer, s.handleActionRecords))
+	mux.HandleFunc("/api/audit/export", s.protect(auth.RoleViewer, s.handleAuditExport))
+	mux.HandleFunc("/api/audit/health", s.protect(auth.RoleViewer, s.handleAuditHealth))
+	mux.HandleFunc("/api/audit/integrity", s.protect(auth.RoleViewer, s.handleAuditIntegrity))
+	mux.HandleFunc("/api/audit", s.protect(auth.RoleViewer, s.handleAudit))
 	mux.HandleFunc("/api/jobs", s.protect(auth.RoleViewer, s.handleJobs))
 	return s.logRequests(mux)
 }
@@ -119,7 +130,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	if err := s.writeAudit("discovery", results); err != nil {
+	if err := s.writeAudit(r.Context(), "discovery", results); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -153,19 +164,19 @@ func (s *Server) SeedDemo(ctx context.Context) error {
 		return nil
 	}
 	res := resource.Resource{
-		ID:           "k8s:prod:payments:payment-service-deployment",
-		Type:         resource.TypeKubernetesDeployment,
-		Provider:     resource.ProviderKubernetes,
-		Name:         "payment-service-deployment",
-		Environment:  resource.EnvProduction,
-		Owner:        "platform",
-		Region:       "us-east-1",
-		Account:      "acme-prod",
-		Criticality:  resource.CriticalityHigh,
-		MonthlyCost:  15000,
-		Labels:       map[string]string{"namespace": "payments", "service": "payments"},
-		Metadata:     map[string]any{"namespace": "payments", "name": "payment-service-deployment", "pod_regex": "payment-service-.+"},
-		CurrentState: map[string]any{"memory_request_bytes": 8589934592, "memory_limit_bytes": 17179869184},
+		Type:               resource.TypeKubernetesDeployment,
+		Provider:           resource.ProviderKubernetes,
+		ProviderResourceID: "payments/payment-service-deployment",
+		Name:               "payment-service-deployment",
+		Environment:        resource.EnvProduction,
+		Owner:              "platform",
+		Region:             "us-east-1",
+		Account:            "acme-prod",
+		Criticality:        resource.CriticalityHigh,
+		MonthlyCost:        15000,
+		Labels:             map[string]string{"namespace": "payments", "service": "payments"},
+		Metadata:           map[string]any{"namespace": "payments", "name": "payment-service-deployment", "pod_regex": "payment-service-.+"},
+		CurrentState:       map[string]any{"memory_request_bytes": 8589934592, "memory_limit_bytes": 17179869184},
 	}
 	res, err = s.st.UpsertResource(ctx, res)
 	if err != nil {
@@ -175,6 +186,8 @@ func (s *Server) SeedDemo(ctx context.Context) error {
 		ResourceID:              res.ID,
 		PluginID:                "kubernetes-action",
 		AlgorithmID:             recommender.BuiltInHeadroomAlgorithmID,
+		AlgorithmVersion:        "1",
+		EvidenceRefs:            []string{"demo:metrics:payment-service-deployment"},
 		ActionType:              "k8s.patch_resources",
 		Title:                   "Reduce memory request for payment-service-deployment",
 		Summary:                 "Reduce memory request while retaining 35% P95 headroom and requiring policy approval for production.",
@@ -220,12 +233,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"status":         status,
 		"store":          "healthy",
 		"durable_worker": s.controller != nil,
 		"plugins":        statuses,
-	})
+	}
+	if diagnostics, ok := s.st.(store.DiagnosticsStore); ok {
+		response["storage"] = diagnostics.StorageDiagnostics(r.Context())
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -286,6 +303,19 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actions, err := s.st.ListActionEvents(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"actions": actions})
+}
+
+func (s *Server) handleActionRecords(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	actions, err := s.st.ListActions(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -410,7 +440,7 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusServiceUnavailable, "durable worker unavailable")
 			return
 		}
-		job, err := s.controller.Submit(r.Context(), id, actor)
+		job, err := s.controller.Submit(r.Context(), id, actor, r.Header.Get("Idempotency-Key"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -418,12 +448,12 @@ func (s *Server) handleRecommendationAction(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job})
 		return
 	}
-	out, err := orchestrator.New(s.st, s.plugins, s.policies).ExecuteRecommendation(r.Context(), id, mode, actor)
+	out, err := orchestrator.New(s.st, s.plugins, s.policies).ExecuteRecommendation(r.Context(), id, mode, actor, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.writeAudit("action", out); err != nil {
+	if err := s.writeAudit(r.Context(), "action", out); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -451,6 +481,10 @@ func (s *Server) dashboard(ctx context.Context) (Dashboard, error) {
 	if err != nil {
 		return Dashboard{}, err
 	}
+	actionRecords, err := s.st.ListActions(ctx)
+	if err != nil {
+		return Dashboard{}, err
+	}
 	plugins, err := s.pluginStatuses(ctx)
 	if err != nil {
 		return Dashboard{}, err
@@ -463,6 +497,7 @@ func (s *Server) dashboard(ctx context.Context) (Dashboard, error) {
 		Recommendations: recs,
 		Plugins:         plugins,
 		Actions:         actions,
+		ActionRecords:   actionRecords,
 		Policy: PolicySummary{
 			ID:            "oss-foundation-v1",
 			Name:          "OSS Foundation Policy",
@@ -489,7 +524,7 @@ func (s *Server) pluginStatuses(ctx context.Context) ([]PluginStatus, error) {
 func stats(recs []store.Recommendation, actions []store.ActionEvent) Stats {
 	var out Stats
 	for _, rec := range recs {
-		if rec.Status != store.RecommendationRejected && !store.Terminal(rec.Status) && rec.Status != store.RecommendationExecuted {
+		if !store.RecommendationTerminal(rec.Status) && rec.Status != store.RecommendationExecuting {
 			out.ProjectedSavingsMonthly += rec.EstimatedSavingsMonthly
 			out.OpenRecommendations++
 		}
@@ -501,7 +536,7 @@ func stats(recs []store.Recommendation, actions []store.ActionEvent) Stats {
 	applied := map[int64]bool{}
 	rolledBack := map[int64]bool{}
 	for _, action := range actions {
-		if action.Result == store.ActionExecuted || action.Result == "waiting_rollout" || action.Result == "verifying" || action.Result == "verified" {
+		if action.Result == string(store.ActionExecuting) || action.Result == "waiting_rollout" || action.Result == "verifying" || action.Result == "verified" {
 			applied[action.RecommendationID] = true
 		}
 		if action.Result == "rolled_back" {
@@ -530,7 +565,35 @@ func parseRecommendationPath(path string) (int64, string, error) {
 	return id, parts[3], nil
 }
 
-func (s *Server) writeAudit(recordType string, payload any) error {
+func (s *Server) writeAudit(ctx context.Context, recordType string, payload any) error {
+	correlationID := correlationFromContext(ctx)
+	identity, ok := auth.FromContext(ctx)
+	actor := audit.Actor{Type: "service", ID: "consize-api"}
+	if ok {
+		actor = audit.Actor{Type: "user", ID: identity.Subject}
+	}
+	if s.audit == nil {
+		return fmt.Errorf("required audit writer unavailable")
+	}
+	family := audit.FamilyAction
+	reasonCode := "action_complete"
+	summary := "Governed action completed"
+	if recordType == "discovery" {
+		family = audit.FamilyDiscovery
+		reasonCode = "discovery_complete"
+		summary = "Infrastructure discovery completed"
+	}
+	_, err := s.audit.Append(ctx, audit.Input{
+		IdempotencyKey: correlationID + ":" + recordType + ":completed",
+		Type:           recordType + ".completed", Family: family, Kind: audit.KindOutcome,
+		Actor: actor, Source: "api", CorrelationID: correlationID,
+		Result: audit.ResultSucceeded, Severity: audit.SeverityInfo,
+		Visibility: audit.VisibilitySummary, ReasonCode: reasonCode, Summary: summary,
+		Details: map[string]any{"operation": recordType, "status": "completed"},
+	})
+	if err != nil {
+		return fmt.Errorf("persist required audit event: %w", err)
+	}
 	if s.cfg.Audit.Path == "" {
 		return nil
 	}
@@ -539,6 +602,160 @@ func (s *Server) writeAudit(recordType string, payload any) error {
 		return err
 	}
 	return sink.Write(recordType, payload)
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	query, err := auditQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	page, err := s.auditStore().QueryAuditEvents(r.Context(), query)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	query, err := auditQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	query.Limit = 500
+	tmp, err := os.CreateTemp("", "consize-audit-export-*.jsonl")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "prepare audit export")
+		return
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	for {
+		page, queryErr := s.auditStore().QueryAuditEvents(r.Context(), query)
+		if queryErr != nil {
+			writeError(w, http.StatusServiceUnavailable, queryErr.Error())
+			return
+		}
+		if err := audit.ExportJSONL(tmp, page.Events); err != nil {
+			writeError(w, http.StatusInternalServerError, "prepare audit export")
+			return
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.After = page.NextCursor
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		writeError(w, http.StatusInternalServerError, "prepare audit export")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Content-Disposition", `attachment; filename="consize-audit.jsonl"`)
+	if _, err := io.Copy(w, tmp); err != nil {
+		slog.Error("audit export failed", "error", err)
+	}
+}
+
+func (s *Server) handleAuditHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	health := s.auditStore().AuditHealth(r.Context())
+	status := http.StatusOK
+	if !health.Healthy {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, health)
+}
+
+func (s *Server) handleAuditIntegrity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	report := s.auditStore().CheckAuditIntegrity(r.Context())
+	status := http.StatusOK
+	if !report.Valid {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, report)
+}
+
+func (s *Server) auditStore() audit.Store {
+	if store, ok := s.st.(audit.Store); ok {
+		return store
+	}
+	return unavailableAuditStore{}
+}
+
+type unavailableAuditStore struct{}
+
+func (unavailableAuditStore) AppendAuditEvent(context.Context, audit.Event) (audit.Event, error) {
+	return audit.Event{}, fmt.Errorf("audit store unavailable")
+}
+func (unavailableAuditStore) QueryAuditEvents(context.Context, audit.Query) (audit.Page, error) {
+	return audit.Page{}, fmt.Errorf("audit store unavailable")
+}
+func (unavailableAuditStore) AuditHealth(context.Context) audit.Health {
+	return audit.Health{Healthy: false, PersistenceFailures: 1, LastError: "audit store unavailable"}
+}
+func (unavailableAuditStore) CheckAuditIntegrity(context.Context) audit.IntegrityReport {
+	return audit.IntegrityReport{Valid: false, InvalidEvents: []string{"audit_store_unavailable"}}
+}
+func (unavailableAuditStore) CleanupAuditEvents(context.Context, time.Time, map[string]bool) (int, error) {
+	return 0, fmt.Errorf("audit store unavailable")
+}
+
+func auditQuery(r *http.Request) (audit.Query, error) {
+	values := r.URL.Query()
+	query := audit.Query{
+		ResourceID: values.Get("resource_id"), WorkflowID: values.Get("workflow_id"),
+		CorrelationID: values.Get("correlation_id"), Family: values.Get("family"),
+		Result: values.Get("result"), Severity: values.Get("severity"), ActorID: values.Get("actor_id"),
+		PluginID: values.Get("plugin_id"), After: values.Get("cursor"), SummaryOnly: values.Get("view") == "summary",
+	}
+	if view := values.Get("view"); view != "" && view != "summary" && view != "detail" {
+		return query, fmt.Errorf("view must be summary or detail")
+	}
+	if query.After != "" {
+		if _, err := audit.DecodeCursor(query.After); err != nil {
+			return query, err
+		}
+	}
+	if raw := values.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 500 {
+			return query, fmt.Errorf("limit must be between 1 and 500")
+		}
+		query.Limit = limit
+	}
+	for name, target := range map[string]*time.Time{"from": &query.From, "to": &query.To} {
+		if value := values.Get(name); value != "" {
+			parsed, err := time.Parse(time.RFC3339, value)
+			if err != nil {
+				return query, fmt.Errorf("%s must be RFC3339", name)
+			}
+			*target = parsed.UTC()
+		}
+	}
+	if !query.From.IsZero() && !query.To.IsZero() && !query.From.Before(query.To) {
+		return query, fmt.Errorf("from must be before to")
+	}
+	if err := query.Validate(); err != nil {
+		return query, err
+	}
+	return query, nil
 }
 
 func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
@@ -631,9 +848,19 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		r = r.WithContext(audit.WithCorrelation(context.WithValue(r.Context(), requestIDContextKey{}, requestID), requestID))
 		next.ServeHTTP(recorder, r)
 		slog.Info("http request", "request_id", requestID, "method", r.Method, "path", r.URL.Path, "status", recorder.status, "duration_ms", time.Since(started).Milliseconds())
 	})
+}
+
+type requestIDContextKey struct{}
+
+func correlationFromContext(ctx context.Context) string {
+	if value, ok := ctx.Value(requestIDContextKey{}).(string); ok && value != "" {
+		return value
+	}
+	return fmt.Sprintf("req-%d", requestSequence.Add(1))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
