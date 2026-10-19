@@ -31,7 +31,8 @@ import {
   Sparkles,
   Zap
 } from "lucide-react";
-import { ThemeToggle } from "./theme-toggle";
+//import { ThemeToggle } from "./theme-toggle";
+import { ThemeToggle } from "@/components/shell/ThemeToggle";
 import type { components } from "../lib/generated/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_CONSIZE_API_BASE_URL ?? "http://127.0.0.1:8080";
