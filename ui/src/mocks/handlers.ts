@@ -88,7 +88,10 @@ export const handlers = [
       const wanted = q.get(key);
       if (wanted) items = items.filter((item) => read(item) === wanted);
     }
-
+    // sort=priority: backend ranking order, superseded work excluded.
+    if (q.get("sort") === "priority") {
+      items = items.filter((item) => item.status !== "superseded");
+    }
     return HttpResponse.json({ items, page: { next_cursor: null, has_more: false } });
   }),
 
@@ -177,4 +180,5 @@ export const handlers = [
   //   if (isDown()) return unavailable("Audit service unavailable");
   //   return HttpResponse.json({ items: isEmpty() ? [] : auditEvents });
   // }),
+  
 ];
