@@ -17,6 +17,10 @@ export type Scenario =
   | "backend-down";
 
 let scenario: Scenario = "healthy";
+// Demo only: pretend the evaluation finished four minutes before this mock session.
+// Keep this timestamp across list refetches so the displayed age can increase.
+// A fresh page load starts a new mock session; real data will use the backend's evaluation time.
+const mockEvaluatedAt = new Date(Date.now() - 4 * 60_000).toISOString();
 export function setScenario(next: Scenario) {
   scenario = next;
 }
@@ -85,17 +89,51 @@ export const handlers = [
       if (wanted) items = items.filter((item) => read(item) === wanted);
     }
 
-    // sort=priority: backend ranking order, superseded work excluded.
-    if (q.get("sort") === "priority") {
-      items = items.filter((item) => item.status !== "superseded");
-    }
-
-    const limit = Number(q.get("limit")) || undefined;
-    const hasMore = limit !== undefined && items.length > limit;
-    if (limit !== undefined) items = items.slice(0, limit);
-
-    return HttpResponse.json({ items, page: { next_cursor: null, has_more: hasMore } });
+    return HttpResponse.json({ items, page: { next_cursor: null, has_more: false } });
   }),
+
+
+  http.get("*/api/v1/plugins", () => {
+    if (scenario === "backend-down") {
+      return HttpResponse.json(
+        { title: "Capability service unavailable", status: 503, retryable: true },
+        { status: 503, headers: { "Content-Type": "application/problem+json" } },
+      );
+    }
+    const items = [
+      {
+        id: "kubernetes",
+        display_name: "Kubernetes",
+        capability: "Resource discovery",
+        health: scenario === "partial-failure" ? "degraded" : "healthy",
+        message: scenario === "partial-failure" ? "API server latency elevated" : undefined,
+        last_checked_at: new Date().toISOString(),
+      },
+      {
+        id: "prometheus",
+        display_name: "Prometheus",
+        capability: "Evidence collection",
+        health: "healthy",
+        last_checked_at: new Date().toISOString(),
+      },
+    ];
+    return HttpResponse.json({ items });
+  }),
+
+  // http.get("*/api/v1/audit-events", () => {
+  //   if (scenario === "backend-down" || scenario === "partial-failure") {
+  //     return HttpResponse.json(
+  //       { title: "Audit service unavailable", status: 503, retryable: true },
+  //       { status: 503, headers: { "Content-Type": "application/problem+json" } },
+  //     );
+  //   }
+
+  //   const limit = Number(q.get("limit")) || undefined;
+  //   const hasMore = limit !== undefined && items.length > limit;
+  //   if (limit !== undefined) items = items.slice(0, limit);
+
+  //   return HttpResponse.json({ items, page: { next_cursor: null, has_more: hasMore } });
+  // }),
 
   http.get("*/api/v1/recommendations/:id", ({ params }) => {
     if (isDown()) return unavailable("Recommendation service unavailable");
@@ -135,8 +173,8 @@ export const handlers = [
     });
   }),
 
-  http.get("*/api/v1/audit-events", () => {
-    if (isDown()) return unavailable("Audit service unavailable");
-    return HttpResponse.json({ items: isEmpty() ? [] : auditEvents });
-  }),
+  // http.get("*/api/v1/audit-events", () => {
+  //   if (isDown()) return unavailable("Audit service unavailable");
+  //   return HttpResponse.json({ items: isEmpty() ? [] : auditEvents });
+  // }),
 ];

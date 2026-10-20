@@ -1,4 +1,5 @@
 "use client";
+
 import { Bell, Search } from "lucide-react";
 import { DateRangeMenu } from "@/features/scope/DateRangeMenu";
 import { ScopeMenu } from "@/features/scope/scopeMenu";

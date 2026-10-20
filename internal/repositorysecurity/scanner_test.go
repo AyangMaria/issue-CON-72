@@ -36,6 +36,38 @@ func TestFrontendServerConfigurationExposure(t *testing.T) {
 	}
 }
 
+func TestFrontendBuildModeIsNotServerConfiguration(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+		wantSecret bool
+	}{
+		{"build mode", `process.env.NODE_ENV`, false},
+		{"build mode bracket access", `process.env["NODE_ENV"]`, false},
+		{"build mode single quote access", `process.env['NODE_ENV']`, false},
+		{"database configuration", `process.env.DATABASE_URL`, true},
+		{"build mode followed by database configuration", `process.env.NODE_ENV; const db = process.env.DATABASE_URL`, true},
+		{"similarly named private variable", `process.env.NODE_ENVIRONMENT`, true},
+		{"runtime options", `process.env.NODE_OPTIONS`, true},
+		{"sensitive public variable", `process.env.NEXT_PUBLIC_API_SECRET`, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			file := TrackedFile{
+				Path: "ui/src/app/providers.tsx", ContentSet: true,
+				Content: []byte(`"use client"; const mode = ` + test.expression),
+			}
+			findings := scanContent(file)
+			if hasRule(findings, "server-config-in-client") != test.wantSecret {
+				t.Fatalf("unexpected server configuration findings: %#v", findings)
+			}
+			if !test.wantSecret && len(findings) != 0 {
+				t.Fatalf("build mode produced security findings: %#v", findings)
+			}
+		})
+	}
+}
+
 func TestWorkflowRules(t *testing.T) {
 	unsafe := TrackedFile{Path: ".github/workflows/unsafe.yml", ContentSet: true, Content: []byte(`
 on: pull_request_target

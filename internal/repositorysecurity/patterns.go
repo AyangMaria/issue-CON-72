@@ -160,6 +160,10 @@ func scanFrontendExposure(path, text string) []Candidate {
 			if name == "" {
 				name = match[2]
 			}
+			// Next.js exposes NODE_ENV as the client bundle's build mode.
+			if name == "NODE_ENV" {
+				continue
+			}
 			if !strings.HasPrefix(name, "NEXT_PUBLIC_") || sensitiveConfigurationName(name) {
 				findings = append(findings, secretCandidate("server-config-in-client", path, "client component reads server-only environment configuration"))
 				break

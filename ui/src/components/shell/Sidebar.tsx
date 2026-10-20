@@ -14,10 +14,8 @@ import {
   Shield,
   Sparkles,
   Server,
-  BarChart,
 } from "lucide-react";
 import { useDashboardSummary } from "@/features/overview/queries";
-//import { useScope } from "@/features/scope/useScope";
 import { useScope } from "@/features/scope/useScope";
 
 const NAV_ITEMS = [
@@ -28,7 +26,7 @@ const NAV_ITEMS = [
   { label: "Plugins", href: "/plugins", icon: Network },
   { label: "Approvals", href: "/approvals", icon: CheckCircle2 },
   { label: "Audit", href: "/audit", icon: FileText },
-  { label: "Reports", href: "/reports", icon: BarChart },
+  { label: "Reports", href: "/reports", icon: Activity },
 ] as const;
 
 export function Sidebar() {
@@ -92,8 +90,8 @@ export function Sidebar() {
       </nav>
 
       {/* Pinned to the bottom of the viewport. Static placeholders for now;
-          this becomes the workspace switcher / account menu when the
-          features exist. */}
+          this becomes the workspace switcher / account menu when those
+          features exist, so it deliberately has no interactive affordances. */}
       <div className="shrink-0 border-t border-app-border bg-app-sidebar p-3 space-y-2">
         <div className="flex items-center justify-between p-2 bg-app-surface border border-app-border rounded-btn">
           <div className="flex items-center gap-2 min-w-0">

@@ -12,13 +12,35 @@ export class ApiError extends Error {
   }
 }
 
+// A manual retry can recover a stale development worker as well as refetch data.
+// Real API requests do not need this mock-only preparation.
+export async function prepareApiRetry(): Promise<void> {
+  if (
+    typeof window !== "undefined"
+    && process.env.NODE_ENV === "development"
+    && process.env.NEXT_PUBLIC_USE_MOCKS === "true"
+  ) {
+    const { restartMockServiceWorker } = await import("../mocks/browser");
+    await restartMockServiceWorker();
+  }
+}
+
 export async function apiGet<T>(path: string, schema: z.ZodType<T>, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
+    // Every browser request waits for mocks to be ready, including a manual Retry.
+    // Keep this development-only and skip it during server rendering.
+    if (
+      typeof window !== "undefined"
+      && process.env.NODE_ENV === "development"
+      && process.env.NEXT_PUBLIC_USE_MOCKS === "true"
+    ) {
+      const { startMockServiceWorker } = await import("../mocks/browser");
+      await startMockServiceWorker();
+    }
     res = await fetch(`${API_BASE}${path}`, { signal, cache: "no-store" });
   } catch {
-    // fetch() throwing means the browser couldn't reach the host at all —
-    // distinct from the server responding with an error status.
+    // A network or mock-startup failure happened before receiving an HTTP response.
     throw new ApiError(0);
   }
 

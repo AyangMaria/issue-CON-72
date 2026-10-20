@@ -89,10 +89,10 @@ import {
   auditEventListSchema,
   capabilityListSchema,
   dashboardSummarySchema,
-  pageEnvelope,
   recommendationDetailSchema,
   recommendationListItemSchema,
   scopeOptionsSchema,
+  recommendationListSchema,
 } from "@/schemas";
 
 // Scope + window the summary endpoint understands (design doc §8.1).
@@ -135,8 +135,6 @@ export function useDashboardSummary(params: SummaryParams = {}) {
     refetchInterval: 30_000,
   });
 }
-
-const recommendationListSchema = pageEnvelope(recommendationListItemSchema);
 
 export function useRecommendationList(filters: Record<string, string | undefined> = {}) {
   return useQuery({

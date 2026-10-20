@@ -250,7 +250,7 @@ export function RecommendationPanel() {
             ? `Showing ${items.length} of ${summary.open_recommendations} recommendations`
             : `Showing ${items.length} ${active.label.toLowerCase()} recommendation${items.length === 1 ? "" : "s"}`}
         </span>
-        <Link href={carry("/recommendation")} className="font-medium text-ok-strong hover:underline flex items-center gap-1">
+        <Link href={carry("/recommendations")} className="font-medium text-ok-strong hover:underline flex items-center gap-1">
           <span>View all recommendations</span>
           <span aria-hidden>→</span>
         </Link>
@@ -258,3 +258,4 @@ export function RecommendationPanel() {
     </div>
   );
 }
+//

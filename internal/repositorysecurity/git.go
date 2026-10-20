@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -44,7 +45,7 @@ func LoadGitIndex(ctx context.Context, root string) ([]TrackedFile, string, erro
 			return nil, "", fmt.Errorf("unsupported staged git entry for %q", string(pathBytes))
 		}
 		path := filepath.ToSlash(string(pathBytes))
-		if !exactRelativePath(path) {
+		if !trackedRelativePath(path) {
 			return nil, "", fmt.Errorf("git returned unsafe tracked path %q", path)
 		}
 		sizeBytes, err := gitOutput(ctx, root, "cat-file", "-s", fields[1])
@@ -68,6 +69,13 @@ func LoadGitIndex(ctx context.Context, root string) ([]TrackedFile, string, erro
 		files = append(files, file)
 	}
 	return files, revision, nil
+}
+
+// Git returns literal filenames, including Next.js route names such as [id].
+// Keep paths within the repository without treating those names as patterns.
+// Security declarations still use the stricter exactRelativePath check.
+func trackedRelativePath(path string) bool {
+	return path != "." && fs.ValidPath(path) && filepath.IsLocal(path)
 }
 
 func gitOutput(ctx context.Context, root string, arguments ...string) ([]byte, error) {
